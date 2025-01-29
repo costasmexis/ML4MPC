@@ -1,6 +1,14 @@
+from typing import Union
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch.nn as nn
+from scipy.optimize import LinearConstraint, minimize
+from sklearn.base import BaseEstimator
 from tqdm import tqdm
+
+from .machinelearning import model_predict
 
 # --- Parameters ---
 dt = 1  # Time step
@@ -34,3 +42,99 @@ def generate_training_data(samples: int=1000, return_df: bool=True):
     if return_df:
         return pd.DataFrame(X, columns=['w1', 'Cb']).assign(Cb_next=Y)
     return np.array(X), np.array(Y)
+
+# --- MPC --- #
+# --- Cost Function ---
+def mpc_cost(w1_seq, Cb_ref, Cb0, w2, model, Q, R, N):
+    cost = 0
+    Cb = Cb0
+    for idx in range(N):
+        w1 = w1_seq[idx]
+        Cb = model_predict(Cb, w1, w2, model)
+        cost += Q * (Cb_ref[idx] - Cb) ** 2
+        if idx > 0:  # Penalize difference between consecutive control actions
+            cost += R * (w1 - w1_seq[idx - 1]) ** 2
+    return cost
+
+# --- MPC Solver ---
+def solve_mpc(Cb_ref, Cb, w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_max):
+    """
+    Solve the MPC optimization problem.
+    """
+    # Ensure the reference trajectory matches the prediction horizon
+    if len(Cb_ref) < N:
+        Cb_ref = np.append(Cb_ref, [Cb_ref[-1]] * (N - len(Cb_ref)))  # Pad with the last value
+
+    # Linear constraints on the rate of change of w1
+    delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
+    rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
+
+    # Bounds on the control input
+    bounds = [(w1_min, w1_max) for _ in range(N)]
+
+    # Solve the optimization problem
+    result = minimize(
+        mpc_cost,
+        w1_ini,
+        args=(Cb_ref, Cb, w2, model, Q, R, N),
+        bounds=bounds,
+        constraints=[rate_constraint],
+    )
+
+    # Handle optimization failures
+    if not result.success:
+        print("Optimization failed, using default control inputs")
+        return np.ones(N) * w1_min
+
+    return result.x
+
+# --- Simulation Setup ---
+def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
+    Cb = np.zeros(L + 1)
+    Cb[0] = Cb0
+    w1 = np.zeros(L)
+    w1_ini = np.ones(N) * 2.0
+
+    for idx in tqdm(range(L)):
+        # Adjust the reference trajectory slice for the prediction horizon
+        Cb_ref_slice = Cb_ref[idx:idx+N]
+        if len(Cb_ref_slice) < N:
+            Cb_ref_slice = np.append(Cb_ref_slice, [Cb_ref_slice[-1]] * (N - len(Cb_ref_slice)))
+
+        # Solve the MPC optimization problem
+        w1_mpc = solve_mpc(
+            Cb_ref_slice, Cb[idx], w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_max
+        )
+
+        # Apply the first control input
+        w1[idx] = w1_mpc[0]
+        w1_ini = np.append(w1_mpc[1:], w1_mpc[-1])  # Shift control sequence
+
+        # Update system state using NN
+        Cb[idx+1]=model_predict(Cb[idx],w1[idx],w2,model)
+        
+    return Cb, w1
+        
+
+# --- Plot Results ---
+def plot_results(Cb, Cb_ref, w1):
+    plt.figure(figsize=(12, 6))
+    plt.subplot(2, 1, 1)
+    plt.plot(range(L + 1), Cb, label="True Concentration (Cb)", color="orange")
+    plt.plot(range(L), Cb_ref, label="Set Point (Cb_ref)", linestyle="--", color="red")
+    plt.xlabel("Time")
+    plt.ylabel("Concentration (Cb)")
+    plt.title("Concentration vs. Time")
+    plt.legend()
+    plt.grid()
+
+    plt.subplot(2, 1, 2)
+    plt.step(range(L), w1, where="post", label="Control Input (w1)", color="blue")
+    plt.xlabel("Time")
+    plt.ylabel("Inflow Rate (w1)")
+    plt.title("Control Input vs. Time")
+    plt.legend()
+    plt.grid()
+
+    plt.tight_layout()
+    plt.show()
