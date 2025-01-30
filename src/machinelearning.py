@@ -45,8 +45,8 @@ def train_nn(model: nn.Module, X: np.ndarray, y: np.ndarray, num_epochs: int = 1
             
     return model
 
+# --- Model predition --- #
 def model_predict(Cb, w1, w2, model):
-    # Check if model is sklearn or pytorch
     if hasattr(model, 'predict'):
         return model.predict([[w1, Cb]])[0]
     elif isinstance(model, nn.Module):

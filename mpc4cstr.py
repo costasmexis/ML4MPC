@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
 from scipy.optimize import minimize, LinearConstraint
 from tqdm import tqdm
 from sklearn.neural_network import MLPRegressor
@@ -10,16 +11,22 @@ Cb1 = 24.9  # Concentration of stream 1
 Cb2 = 0.1   # Concentration of stream 2
 k1 = 1.0    # Reaction rate constant
 k2 = 1.0    # Reaction parameter
-N = 7    # Prediction horizon
+N = 7       # Prediction horizon
 L = 60      # Simulation steps
 Q = 1.0     # Weight for tracking
 R = 0.1     # Weight for control effort
+h0 = 10.0   # Initial height
 w1_min, w1_max = 0, 4.0  # Control input bounds
 delta_w1_max = 0.5  # Max rate of change for control input
 Cb0 = 22.0  # Initial concentration
 w2 = 0.1    # Disturbance input
 
-
+# --- Real System Dynamics ---
+def system_of_odes(t, y, w1, w2):
+    h, Cb = y
+    dh_dt = w1 + w2 - 0.2 * np.sqrt(h)
+    dCb_dt = ((Cb1 - Cb) * w1 / h + (Cb2 - Cb) * w2 / h - k1 * Cb / (1 + k2 * Cb)**2)
+    return [dh_dt, dCb_dt]
 
 # --- Neural Network Training ---
 def generate_training_data(samples=1000):
@@ -28,9 +35,8 @@ def generate_training_data(samples=1000):
         w1 = np.random.uniform(w1_min, w1_max)
         Cb = np.random.uniform(20.0, 25.0)
         h = np.random.uniform(8.0, 12.0)
-        dCb_dt = ((Cb1 - Cb) * w1 / h + (Cb2 - Cb) * w2 / h -
-                  k1 * Cb / (1 + k2 * Cb)**2)
-        Cb_next = Cb + dCb_dt * dt
+        dCb_dt = ((Cb1 - Cb) * w1 / h + (Cb2 - Cb) * w2 / h - k1 * Cb / (1 + k2 * Cb)**2)
+        Cb_next = Cb + dCb_dt * dt  # Use dt for training consistency
         X.append([w1, Cb])
         Y.append(Cb_next)
     return np.array(X), np.array(Y)
@@ -45,9 +51,9 @@ def cstr_nn_step(Cb, w1, w2, model):
     return model.predict([[w1, Cb]])[0]
 
 # --- Cost Function ---
-def mpc_cost(w1_seq,w1_ini,Cb_ref, Cb0, w2, model, Q, R, N):
+def mpc_cost(w1_seq, w1_ini, Cb_ref, Cb_current, w2, model, Q, R, N):
     cost = 0
-    Cb = Cb0
+    Cb = Cb_current  # ΤΩΡΑ ΞΕΚΙΝΑΜΕ ΑΠΟ ΤΗΝ ΠΡΑΓΜΑΤΙΚΗ ΤΙΜΗ ΤΟΥ ΣΥΣΤΗΜΑΤΟΣ
     for idx in range(N):
         w1 = w1_seq[idx]
         Cb = cstr_nn_step(Cb, w1, w2, model)
@@ -61,18 +67,13 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_m
     """
     Solve the MPC optimization problem.
     """
-    # Ensure the reference trajectory matches the prediction horizon
     if len(Cb_ref) < N:
-        Cb_ref = np.append(Cb_ref, [Cb_ref[-1]] * (N - len(Cb_ref)))  # Pad with the last value
+        Cb_ref = np.append(Cb_ref, [Cb_ref[-1]] * (N - len(Cb_ref)))
 
-    # Linear constraints on the rate of change of w1
     delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
     rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
-
-    # Bounds on the control input
     bounds = [(w1_min, w1_max) for _ in range(N)]
 
-    # Solve the optimization problem
     result = minimize(
         mpc_cost,
         w1_ini,
@@ -81,7 +82,6 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_m
         constraints=[rate_constraint],
     )
 
-    # Handle optimization failures
     if not result.success:
         print("Optimization failed, using default control inputs")
         return np.ones(N) * w1_min
@@ -92,16 +92,24 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_m
 Cb = np.zeros(L + 1)
 Cb[0] = Cb0
 w1 = np.zeros(L)
-Cb_ref = np.array([20.9 if t < 20 else 21.0 if t < 40 else 20.5 for t in range(L)])
+h = np.zeros(L + 1)
+h[0] = h0
+
+# Σωστή Reference Trajectory (Με βάση Απόλυτο Χρόνο)
+Cb_ref = np.array([
+    20.9 if t < 20 else 21.0 if t < 40 else 20.5
+    for t in range(L)
+])
+
 w1_ini = np.ones(N) * 2.0
 
+# --- Simulation Loop ---
 for idx in tqdm(range(L)):
-    # Adjust the reference trajectory slice for the prediction horizon
     Cb_ref_slice = Cb_ref[idx:idx+N]
     if len(Cb_ref_slice) < N:
         Cb_ref_slice = np.append(Cb_ref_slice, [Cb_ref_slice[-1]] * (N - len(Cb_ref_slice)))
 
-    # Solve the MPC optimization problem
+    # Solve MPC optimization problem
     w1_mpc = solve_mpc(
         Cb_ref_slice, Cb[idx], w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_max
     )
@@ -110,8 +118,15 @@ for idx in tqdm(range(L)):
     w1[idx] = w1_mpc[0]
     w1_ini = np.append(w1_mpc[1:], w1_mpc[-1])  # Shift control sequence
 
-    # Update system state using NN
-    Cb[idx+1]=cstr_nn_step(Cb[idx],w1[idx],w2,model)
+    # Update system state using REAL SYSTEM (ODE solver)
+    sol = solve_ivp(
+        system_of_odes,
+        [idx * dt, (idx + 1) * dt],
+        [h[idx], Cb[idx]],
+        args=(w1[idx], w2),
+        method="RK45"
+    )
+    h[idx + 1], Cb[idx + 1] = sol.y[:, -1]
 
 # --- Plot Results ---
 plt.figure(figsize=(12, 6))

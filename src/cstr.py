@@ -20,12 +20,20 @@ N = 7    # Prediction horizon
 L = 60      # Simulation steps
 Q = 1.0     # Weight for tracking
 R = 0.1     # Weight for control effort
+h0 = 10.0   # Initial height
 w1_min, w1_max = 0, 4.0  # Control input bounds
 Cb_min, Cb_max = 20.0, 25.0  # Concentration bounds
 h_min, h_max = 8.0, 12.0
 delta_w1_max = 0.5  # Max rate of change for control input
 Cb0 = 22.0  # Initial concentration
 w2 = 0.1    # Disturbance input
+
+# --- Real System Dynamics --- #
+def system_of_odes(t, y, w1, w2):
+    h, Cb = y
+    dh_dt = w1 + w2 - 0.2 * np.sqrt(h)
+    dCb_dt = ((Cb1 - Cb) * w1 / h + (Cb2 - Cb) * w2 / h - k1 * Cb / (1 + k2 * Cb)**2)
+    return [dh_dt, dCb_dt]
 
 # --- Generate training dataset  ---
 def generate_training_data(samples: int=1000, return_df: bool=True):
@@ -44,6 +52,7 @@ def generate_training_data(samples: int=1000, return_df: bool=True):
     return np.array(X), np.array(Y)
 
 # --- MPC --- #
+# TODO!!!
 # --- Cost Function ---
 def mpc_cost(w1_seq, Cb_ref, Cb0, w2, model, Q, R, N):
     cost = 0
@@ -110,11 +119,10 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
         w1[idx] = w1_mpc[0]
         w1_ini = np.append(w1_mpc[1:], w1_mpc[-1])  # Shift control sequence
 
-        # Update system state using NN
-        Cb[idx+1]=model_predict(Cb[idx],w1[idx],w2,model)
-        
+        # Update system state using NN (TODO: Use actual system model)
+        Cb[idx+1]=model_predict(Cb[idx],w1[idx],w2,model) + np.random.normal(0, 0.01)
+
     return Cb, w1
-        
 
 # --- Plot Results ---
 def plot_results(Cb, Cb_ref, w1):
