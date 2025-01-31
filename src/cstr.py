@@ -12,12 +12,12 @@ from tqdm import tqdm
 from .machinelearning import model_predict
 
 # --- Parameters ---
-dt = 1  # Time step
+dt = 1      # Time step
 Cb1 = 24.9  # Concentration of stream 1
 Cb2 = 0.1   # Concentration of stream 2
 k1 = 1.0    # Reaction rate constant
 k2 = 1.0    # Reaction parameter
-N = 7    # Prediction horizon
+N = 10      # Prediction horizon
 L = 60      # Simulation steps
 Q = 1.0     # Weight for tracking
 R = 0.1     # Weight for control effort
@@ -42,7 +42,8 @@ def generate_training_data(samples: int=1000, return_df: bool=True):
     X, Y = [], []
     for _ in tqdm(range(samples)):
         w1 = np.random.uniform(w1_min, w1_max)
-        w2 = np.random.uniform(w2_min, w2_max)
+        # w2 = np.random.uniform(w2_min, w2_max)
+        w2 = 0.1
         Cb = np.random.uniform(Cb_min, Cb_max)
         h = np.random.uniform(h_min, h_max)
         dCb_dt = ((Cb1 - Cb) * w1 / h + (Cb2 - Cb) * w2 / h - k1 * Cb / (1 + k2 * Cb)**2)
@@ -90,6 +91,7 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
         args=(Cb_ref, Cb, w2, model),
         bounds=bounds,
         constraints=[rate_constraint],
+        method='COBYLA'
     )
 
     if not result.success:
@@ -126,10 +128,11 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
             [idx * dt, (idx + 1) * dt],
             [h[idx], Cb[idx]],
             args=(w1[idx], w2),
-            t_eval= np.arange(idx * dt, (idx + 1) * dt + dt, dt),
+            # t_eval= np.arange(idx * dt, (idx + 1) * dt + dt, dt),
             method="RK45"
         )
         h[idx + 1], Cb[idx + 1] = sol.y[:, -1]
+        
     return Cb, w1
 
 # --- Plot Results ---
