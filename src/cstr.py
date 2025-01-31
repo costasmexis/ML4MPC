@@ -17,7 +17,7 @@ Cb1 = 24.9  # Concentration of stream 1
 Cb2 = 0.1   # Concentration of stream 2
 k1 = 1.0    # Reaction rate constant
 k2 = 1.0    # Reaction parameter
-N = 10      # Prediction horizon
+N = 5      # Prediction horizon
 L = 60      # Simulation steps
 Q = 1.0     # Weight for tracking
 R = 0.1     # Weight for control effort
@@ -73,13 +73,6 @@ def mpc_cost(w1_seq, Cb_ref, Cb0, w2, model):
 # --- MPC Solver ---
 def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
 
-    # if len(Cb_ref) < N:
-    #     Cb_ref = np.append(Cb_ref, [Cb_ref[-1]] * (N - len(Cb_ref)))
-
-    # delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
-    # rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
-    # bounds = [(w1_min, w1_max) for _ in range(N)]
-    
     delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
     delta_w1_matrix = delta_w1_matrix[:-1, :]  # Remove the last row 
     rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
@@ -125,10 +118,10 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
         # Update system state using REAL SYSTEM (ODE solver)
         sol = solve_ivp(
             system_of_odes,
-            [idx * dt, (idx + 1) * dt],
-            [h[idx], Cb[idx]],
+            t_span=[idx * dt, (idx + 1) * dt],
+            y0=[h[idx], Cb[idx]],
             args=(w1[idx], w2),
-            # t_eval= np.arange(idx * dt, (idx + 1) * dt + dt, dt),
+            t_eval= [idx * dt, (idx + 1) * dt],
             method="RK45"
         )
         h[idx + 1], Cb[idx + 1] = sol.y[:, -1]
