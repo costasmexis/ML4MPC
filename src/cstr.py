@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import torch.nn as nn
 from scipy.optimize import LinearConstraint, minimize
+from scipy.integrate import solve_ivp
 from sklearn.base import BaseEstimator
 from tqdm import tqdm
 
@@ -52,11 +53,10 @@ def generate_training_data(samples: int=1000, return_df: bool=True):
     return np.array(X), np.array(Y)
 
 # --- MPC --- #
-# TODO!!!
-# --- Cost Function ---
-def mpc_cost(w1_seq, Cb_ref, Cb0, w2, model, Q, R, N):
+# --- Cost Function --- #
+def mpc_cost(w1_seq, Cb_ref, Cb0, w2, model):
     cost = 0
-    Cb = Cb0
+    Cb = Cb0 # Start from the actual system value
     for idx in range(N):
         w1 = w1_seq[idx]
         Cb = model_predict(Cb, w1, w2, model)
@@ -66,31 +66,28 @@ def mpc_cost(w1_seq, Cb_ref, Cb0, w2, model, Q, R, N):
     return cost
 
 # --- MPC Solver ---
-def solve_mpc(Cb_ref, Cb, w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_max):
-    """
-    Solve the MPC optimization problem.
-    """
-    # Ensure the reference trajectory matches the prediction horizon
-    if len(Cb_ref) < N:
-        Cb_ref = np.append(Cb_ref, [Cb_ref[-1]] * (N - len(Cb_ref)))  # Pad with the last value
+def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
 
-    # Linear constraints on the rate of change of w1
+    # if len(Cb_ref) < N:
+    #     Cb_ref = np.append(Cb_ref, [Cb_ref[-1]] * (N - len(Cb_ref)))
+
+    # delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
+    # rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
+    # bounds = [(w1_min, w1_max) for _ in range(N)]
+    
     delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
+    delta_w1_matrix = delta_w1_matrix[:-1, :]  # Remove the last row
     rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
-
-    # Bounds on the control input
     bounds = [(w1_min, w1_max) for _ in range(N)]
-
-    # Solve the optimization problem
+    
     result = minimize(
         mpc_cost,
         w1_ini,
-        args=(Cb_ref, Cb, w2, model, Q, R, N),
+        args=(Cb_ref, Cb, w2, model),
         bounds=bounds,
         constraints=[rate_constraint],
     )
 
-    # Handle optimization failures
     if not result.success:
         print("Optimization failed, using default control inputs")
         return np.ones(N) * w1_min
@@ -102,7 +99,9 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
     Cb = np.zeros(L + 1)
     Cb[0] = Cb0
     w1 = np.zeros(L)
-    w1_ini = np.ones(N) * 2.0
+    h = np.zeros(L + 1)
+    h[0] = h0
+    w1_ini = np.ones(N) * 0.25
 
     for idx in tqdm(range(L)):
         # Adjust the reference trajectory slice for the prediction horizon
@@ -110,17 +109,25 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
         if len(Cb_ref_slice) < N:
             Cb_ref_slice = np.append(Cb_ref_slice, [Cb_ref_slice[-1]] * (N - len(Cb_ref_slice)))
 
-        # Solve the MPC optimization problem
-        w1_mpc = solve_mpc(
-            Cb_ref_slice, Cb[idx], w1_ini, w2, model, Q, R, N, w1_min, w1_max, delta_w1_max
-        )
+        # Solve MPC optimization problem
+        w1_mpc = solve_mpc(Cb_ref_slice, Cb[idx], w1_ini, w2, model)
 
         # Apply the first control input
         w1[idx] = w1_mpc[0]
         w1_ini = np.append(w1_mpc[1:], w1_mpc[-1])  # Shift control sequence
-
-        # Update system state using NN (TODO: Use actual system model)
-        Cb[idx+1]=model_predict(Cb[idx],w1[idx],w2,model) + np.random.normal(0, 0.01)
+        
+        # Update system state using REAL SYSTEM (ODE solver)
+        sol = solve_ivp(
+            system_of_odes,
+            [idx * dt, (idx + 1) * dt],
+            [h[idx], Cb[idx]],
+            args=(w1[idx], w2),
+            t_eval= np.arange(idx * dt, (idx + 1) * dt + dt, dt),
+            method="RK45"
+        )
+        h[idx + 1], Cb[idx + 1] = sol.y[:, -1]
+        
+        
 
     return Cb, w1
 
