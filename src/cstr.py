@@ -22,7 +22,8 @@ L = 60      # Simulation steps
 Q = 1.0     # Weight for tracking
 R = 0.1     # Weight for control effort
 h0 = 10.0   # Initial height
-w1_min, w1_max = 0, 4.0  # Control input bounds
+w1_min, w1_max = 0, 4.0  # Control input bounds (w1)
+w2_min, w2_max = 0, 4.0  # Control input bounds (w2)
 Cb_min, Cb_max = 20.0, 25.0  # Concentration bounds
 h_min, h_max = 8.0, 12.0
 delta_w1_max = 0.5  # Max rate of change for control input
@@ -41,16 +42,19 @@ def generate_training_data(samples: int=1000, return_df: bool=True):
     X, Y = [], []
     for _ in tqdm(range(samples)):
         w1 = np.random.uniform(w1_min, w1_max)
+        w2 = np.random.uniform(w2_min, w2_max)
         Cb = np.random.uniform(Cb_min, Cb_max)
         h = np.random.uniform(h_min, h_max)
-        dCb_dt = ((Cb1 - Cb) * w1 / h + (Cb2 - Cb) * w2 / h -
-                  k1 * Cb / (1 + k2 * Cb)**2)
+        dCb_dt = ((Cb1 - Cb) * w1 / h + (Cb2 - Cb) * w2 / h - k1 * Cb / (1 + k2 * Cb)**2)
         Cb_next = Cb + dCb_dt * dt
-        X.append([w1, Cb])
+        X.append([w1, w2, Cb])
         Y.append(Cb_next)
     if return_df:
-        return pd.DataFrame(X, columns=['w1', 'Cb']).assign(Cb_next=Y)
-    return np.array(X), np.array(Y)
+        df = pd.DataFrame(X, columns=['w1', 'w2', 'Cb'])
+        df['Cb_next'] = Y
+        return df
+    else:
+        return np.array(X), np.array(Y)
 
 # --- MPC --- #
 # --- Cost Function --- #
@@ -76,12 +80,12 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
     # bounds = [(w1_min, w1_max) for _ in range(N)]
     
     delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
-    delta_w1_matrix = delta_w1_matrix[:-1, :]  # Remove the last row
+    delta_w1_matrix = delta_w1_matrix[:-1, :]  # Remove the last row 
     rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
     bounds = [(w1_min, w1_max) for _ in range(N)]
     
     result = minimize(
-        mpc_cost,
+        mpc_cost, 
         w1_ini,
         args=(Cb_ref, Cb, w2, model),
         bounds=bounds,
@@ -126,9 +130,6 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
             method="RK45"
         )
         h[idx + 1], Cb[idx + 1] = sol.y[:, -1]
-        
-        
-
     return Cb, w1
 
 # --- Plot Results ---
