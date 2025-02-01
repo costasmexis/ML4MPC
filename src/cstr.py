@@ -122,7 +122,7 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
             y0=[h[idx], Cb[idx]],
             args=(w1[idx], w2),
             t_eval= [idx * dt, (idx + 1) * dt],
-            method="RK45"
+            method="Radau"
         )
         h[idx + 1], Cb[idx + 1] = sol.y[:, -1]
         
