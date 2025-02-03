@@ -4,9 +4,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch.nn as nn
-from scipy.optimize import LinearConstraint, minimize
+from scipy.optimize import LinearConstraint, minimize, differential_evolution
 from scipy.integrate import solve_ivp
 from sklearn.base import BaseEstimator
+from pyswarm import pso
 from tqdm import tqdm
 
 from .machinelearning import model_predict
@@ -84,7 +85,7 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
         args=(Cb_ref, Cb, w2, model),
         bounds=bounds,
         constraints=[rate_constraint],
-        method='COBYLA'
+        method='SLSQP' # COBYLA   
     )
 
     if not result.success:
@@ -94,7 +95,7 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
     return result.x
 
 # --- Simulation Setup ---
-def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
+def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list, method: str = 'opt'):
     Cb = np.zeros(L + 1)
     Cb[0] = Cb0
     w1 = np.zeros(L)
@@ -109,7 +110,12 @@ def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list):
             Cb_ref_slice = np.append(Cb_ref_slice, [Cb_ref_slice[-1]] * (N - len(Cb_ref_slice)))
 
         # Solve MPC optimization problem
-        w1_mpc = solve_mpc(Cb_ref_slice, Cb[idx], w1_ini, w2, model)
+        if method == 'GA':
+            w1_mpc = solve_mpc_ga(Cb_ref_slice, Cb[idx], w2, model)
+        elif method == 'PSO':
+            w1_mpc = solve_mpc_pso(Cb_ref_slice, Cb[idx], w2, model)
+        else:
+            w1_mpc = solve_mpc(Cb_ref_slice, Cb[idx], w1_ini, w2, model)
 
         # Apply the first control input
         w1[idx] = w1_mpc[0]
@@ -150,3 +156,41 @@ def plot_results(Cb, Cb_ref, w1):
 
     plt.tight_layout()
     plt.show()
+    
+
+def solve_mpc_ga(Cb_ref, Cb, w2, model):
+    
+    def mpc_cost_ga(w1_flat):
+        return mpc_cost(w1_flat, Cb_ref, Cb, w2, model)
+    
+    bounds = [(w1_min, w1_max) for _ in range(N)]
+    
+    result = differential_evolution(
+        mpc_cost_ga,
+        bounds
+    )
+    
+    if not result.success:
+        print("Optimization failed, using default control inputs")
+        return np.ones(N) * w1_min
+    
+    return result.x
+
+def solve_mpc_pso(Cb_ref, Cb, w2, model, max_iter=100, swarm_size=50):
+    
+    def mpc_cost_pso(w1_flat):
+        return mpc_cost(w1_flat, Cb_ref, Cb, w2, model)
+    
+    lb = [w1_min] * N
+    ub = [w1_max] * N
+    
+    best_w1, _ = pso(
+        mpc_cost_pso,
+        lb,
+        ub,
+        swarmsize=swarm_size,
+        maxiter=max_iter,
+        debug=False
+    )
+    
+    return best_w1
