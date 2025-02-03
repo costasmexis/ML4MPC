@@ -56,10 +56,10 @@ def train_nn(model: nn.Module, X: np.ndarray, y: np.ndarray, num_epochs: int = 1
 # --- Model predition --- #
 def model_predict(Cb, w1, w2, model):
     if hasattr(model, 'predict'):
-        return model.predict([[w1, Cb]])[0]
+        return model.predict([[w1, w2, Cb]])[0]
     elif isinstance(model, nn.Module):
         model.eval()
         with torch.no_grad():
-            return model(torch.tensor([w1, Cb], dtype=torch.float32).to(device)).item()
+            return model(torch.tensor([w1, w2, Cb], dtype=torch.float32).to(device)).item()
     else:
         raise ValueError('Model is not supported')
