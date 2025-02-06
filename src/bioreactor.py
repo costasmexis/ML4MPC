@@ -14,7 +14,12 @@ T_START = 0
 T_END = 50
 IC = [0.05, 0.0, 10.0, 1.0]  # [X0, P0, S0, V0]
 F_0 = 0.05 # l/h
+
 dt = 1
+N = 5       # Prediction horizon
+L = 60      # Simulation steps
+Q = 1.0     # Weight for tracking
+R = 0.1     # Weight for control effort
 
 def feeding(t: float) -> float:
     ''' Feed rate as a function of time '''
@@ -104,37 +109,71 @@ def plot_simulation(df: pd.DataFrame) -> None:
     
     
 ### ----- MPC ----------------- ###
+from scipy.optimize import minimize, LinearConstraint
+from scipy.integrate import solve_ivp
+
+def system_of_odes(t, y, F):
+    X, S, P, V = y
+    dX = mu(S) * X - F * X / V
+    dS = -mu(S) * X / Y_XS + F * (S_F - S) / V
+    dP = Y_PX * mu(S) * X - F * P / V
+    dV = F
+    return [dX, dS, dP, dV]
+
+def model_predict(F, X, S, P, V, model):
+    return model.predict([[F, X, S, P, V]])[0]
+
 # --- Cost Function --- #
-def mpc_cost(w1_seq, Cb_ref, Cb0, w2, model):
+def mpc_cost(F_seq, X_ref, X0, S0, P0, V0, model):
     cost = 0
-    Cb = Cb0 # Start from the actual system value
+    X, S, P, V = X0, S0, P0, V0
     for idx in range(N):
-        w1 = w1_seq[idx]
-        Cb = model_predict(Cb, w1, w2, model)
-        cost += Q * (Cb_ref[idx] - Cb) ** 2
+        F = F_seq[idx]
+        X, S, P, V = model_predict(F, X, S, P, V, model)
+        cost += Q * (X_ref[idx] - X) ** 2
         if idx > 0:  # Penalize difference between consecutive control actions
-            cost += R * (w1 - w1_seq[idx - 1]) ** 2
+            cost += R * (F - F_seq[idx - 1]) ** 2
     return cost
 
 # --- MPC Solver ---
-def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
+def solve_mpc(X_ref, X, S, P, V, F_ini, model):
 
-    delta_w1_matrix = np.eye(N) - np.eye(N, k=1)
-    delta_w1_matrix = delta_w1_matrix[:-1, :]  # Remove the last row 
-    rate_constraint = LinearConstraint(delta_w1_matrix, -delta_w1_max, delta_w1_max)
-    bounds = [(w1_min, w1_max) for _ in range(N)]
-    
     result = minimize(
         mpc_cost, 
-        w1_ini,
-        args=(Cb_ref, Cb, w2, model),
-        bounds=bounds,
-        constraints=[rate_constraint],
+        F_ini,
+        args=(X_ref, X, S, P, V, model),
         method='SLSQP' # COBYLA   
     )
 
-    if not result.success:
-        print("Optimization failed, using default control inputs")
-        return np.ones(N) * w1_min
-
     return result.x
+
+# --- Simulation Setup ---
+def simulation(model, X_ref):
+    
+    X, S, P, V = np.zeros(L + 1), np.zeros(L + 1), np.zeros(L + 1), np.zeros(L + 1)
+    X[0], S[0], P[0], V[0] = IC
+    F = np.zeros(L)
+    F_ini = np.ones(N) * F_0
+    
+    for i in tqdm(range(L)):
+        
+        X_ref_slice = X_ref[i:i+N]
+        if len(X_ref_slice) < N:
+            X_ref_slice = np.append(X_ref_slice, [X_ref_slice[-1]] * (N - len(X_ref_slice)))
+            
+        F_mpc = solve_mpc(X_ref_slice, X[i], S[i], P[i], V[i], F_ini, model)
+        
+        F[i] = F_mpc[0]
+        F_ini = np.append(F_mpc[1:], F_mpc[-1]) # Shift the sequence    
+        
+        sol = solve_ivp(
+            system_of_odes,
+            t_span=[i * dt, (i + 1) * dt],
+            y0=IC,
+            args=(F[0],),
+            t_eval=[i * dt, (i+1) * dt],
+            method='RK45'
+        )
+        X[i+1], S[i+1], P[i+1], V[i+1] = sol.y.T[-1]
+        
+    return X, S, P, V, F
