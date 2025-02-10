@@ -69,8 +69,8 @@ def generate_training_data(mu_max: float = MU_MAX, K_s: float = K_S, Y_xs: float
 
     inputs, outputs = [], []
     for _ in tqdm(range(samples)):
-        F = np.random.uniform(0, 1)
-        X = np.random.uniform(0, 5)
+        F = np.random.uniform(0, 2)
+        X = np.random.uniform(0, 6)
         S = np.random.uniform(0, 12)
         P = np.random.uniform(0, 2)
         V = np.random.uniform(0, 20)
@@ -113,12 +113,13 @@ from scipy.optimize import minimize, LinearConstraint
 from scipy.integrate import solve_ivp
 
 def system_of_odes(t, y, F):
-    X, S, P, V = y
+    # [X0, P0, S0, V0]
+    X, P, S, V = y
     dX = mu(S) * X - F * X / V
     dS = -mu(S) * X / Y_XS + F * (S_F - S) / V
     dP = Y_PX * mu(S) * X - F * P / V
     dV = F
-    return [dX, dS, dP, dV]
+    return [dX, dP, dS, dV]
 
 def model_predict(F, X, S, P, V, model):
     return model.predict([[F, X, S, P, V]])[0]
@@ -137,12 +138,16 @@ def mpc_cost(F_seq, X_ref, X0, S0, P0, V0, model):
 
 # --- MPC Solver ---
 def solve_mpc(X_ref, X, S, P, V, F_ini, model):
-
+    
+    # Linear constraints F >= 0
+    bounds = [(0, 10) for _ in range(N)]
+    
     result = minimize(
         mpc_cost, 
         F_ini,
+        bounds=bounds,
         args=(X_ref, X, S, P, V, model),
-        method='SLSQP' # COBYLA   
+        method='COBYLA' # SLSQP   
     )
 
     return result.x
@@ -151,9 +156,10 @@ def solve_mpc(X_ref, X, S, P, V, F_ini, model):
 def simulation(model, X_ref):
     
     X, S, P, V = np.zeros(L + 1), np.zeros(L + 1), np.zeros(L + 1), np.zeros(L + 1)
-    X[0], S[0], P[0], V[0] = IC
+    X[0], P[0], S[0], V[0] = IC
+    
     F = np.zeros(L)
-    F_ini = np.ones(N) * F_0
+    F_ini = np.ones(N) * 2
     
     for i in tqdm(range(L)):
         
@@ -174,6 +180,6 @@ def simulation(model, X_ref):
             t_eval=[i * dt, (i+1) * dt],
             method='RK45'
         )
-        X[i+1], S[i+1], P[i+1], V[i+1] = sol.y.T[-1]
+        X[i+1], P[i+1], S[i+1], V[i+1] = sol.y.T[-1]
         
-    return X, S, P, V, F
+    return X, P, S, V, F
