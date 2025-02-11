@@ -6,14 +6,14 @@ import matplotlib.pyplot as plt
 
 NUM_SAMPLES = 1000
 MU_MAX = 0.20 # 1/h
-K_S = 1 # g/l
-Y_XS = 0.5 # g/g
-Y_PX = 0.2 # g/g
-S_F = 10 # g/l
+K_S = 1       # g/l
+Y_XS = 0.5    # g/g
+Y_PX = 0.2    # g/g
+S_F = 10      # g/l
 T_START = 0
 T_END = 60
 IC = [0.05, 0.0, 10.0, 1.0]  # [X0, P0, S0, V0]
-F_0 = 0.05 # l/h
+F_0 = 0.05                   # l/h
 
 dt = 1
 N = 5       # Prediction horizon
@@ -24,6 +24,19 @@ R = 0.1     # Weight for control effort
 def feeding(t: float) -> float:
     ''' Feed rate as a function of time '''
     return F_0 * np.exp(0.05 * t)
+
+def plot_simulation(df: pd.DataFrame) -> None:
+    ''' Plot the simulation results '''
+    plt.figure(figsize=(12, 3))
+    plt.plot(df.t, df.X, linestyle='-', marker='o', markersize=3, label='Biomass')
+    plt.plot(df.t, df.P, linestyle='-', marker='o', markersize=3, label='Product')
+    plt.plot(df.t, df.S, linestyle='-', marker='o', markersize=3, label='Substrate')
+    plt.plot(df.t, df.V, linestyle='-', marker='o', markersize=3, label='Volume (L)')
+    plt.legend()
+    plt.xlabel('Time (h)')
+    plt.ylabel('Concentration (g/l)')
+    plt.title('Bioreactor Simulation')
+    plt.show()
 
 def plot_feeding() -> None:
     ''' Plot the feeding rate over time '''
@@ -92,21 +105,6 @@ def generate_training_data(mu_max: float = MU_MAX, K_s: float = K_S, Y_xs: float
         df['X_next'], df['S_next'], df['P_next'], df['V_next'] = np.array(outputs).T
         
     return df
-
-
-def plot_simulation(df: pd.DataFrame) -> None:
-    plt.figure(figsize=(12, 3))
-    plt.plot(df.t, df.X, label='Biomass')
-    plt.plot(df.t, df.P, label='Product')
-    plt.plot(df.t, df.S, label='Substrate')
-    plt.plot(df.t, df.V, label='Volume (L)')
-    plt.legend()
-    plt.xlabel('Time (h)')
-    plt.ylabel('Concentration (g/l)')
-    plt.title('Bioreactor Simulation')
-    plt.show()
-    
-    
     
 ### ----- MPC ----------------- ###
 from scipy.optimize import minimize, LinearConstraint
