@@ -85,7 +85,7 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
         args=(Cb_ref, Cb, w2, model),
         bounds=bounds,
         constraints=[rate_constraint],
-        method='SLSQP' # COBYLA   
+        method='COBYLA' # COBYLA   
     )
 
     if not result.success:
@@ -94,8 +94,36 @@ def solve_mpc(Cb_ref, Cb, w1_ini, w2, model):
 
     return result.x
 
+def solve_mpc_ga(Cb_ref, Cb, w2, model):
+    def mpc_cost_ga(w1_flat):
+        return mpc_cost(w1_flat, Cb_ref, Cb, w2, model)
+    bounds = [(w1_min, w1_max) for _ in range(N)]
+    result = differential_evolution(mpc_cost_ga,bounds)
+    if not result.success:
+        print("Optimization failed, using default control inputs")
+        return np.ones(N) * w1_min
+    return result.x
+
+def solve_mpc_pso(Cb_ref, Cb, w2, model, max_iter=100, swarm_size=50):
+    def mpc_cost_pso(w1_flat):
+        return mpc_cost(w1_flat, Cb_ref, Cb, w2, model)
+    lb = [w1_min] * N
+    ub = [w1_max] * N
+    best_w1, _ = pso(
+        mpc_cost_pso,
+        lb,
+        ub,
+        swarmsize=swarm_size,
+        maxiter=max_iter,
+        debug=False
+    )
+    return best_w1
+
 # --- Simulation Setup ---
 def simulation(model: Union[BaseEstimator, nn.Module], Cb_ref: list, method: str = 'opt'):
+    ''' Simulate the CSTR system using MPC 
+    - method: 'opt' for optimization, 'GA' for genetic algorithm, 'PSO' for particle swarm optimization
+    '''
     Cb = np.zeros(L + 1)
     Cb[0] = Cb0
     w1 = np.zeros(L)
@@ -158,39 +186,4 @@ def plot_results(Cb, Cb_ref, w1):
     plt.show()
     
 
-def solve_mpc_ga(Cb_ref, Cb, w2, model):
-    
-    def mpc_cost_ga(w1_flat):
-        return mpc_cost(w1_flat, Cb_ref, Cb, w2, model)
-    
-    bounds = [(w1_min, w1_max) for _ in range(N)]
-    
-    result = differential_evolution(
-        mpc_cost_ga,
-        bounds
-    )
-    
-    if not result.success:
-        print("Optimization failed, using default control inputs")
-        return np.ones(N) * w1_min
-    
-    return result.x
 
-def solve_mpc_pso(Cb_ref, Cb, w2, model, max_iter=100, swarm_size=50):
-    
-    def mpc_cost_pso(w1_flat):
-        return mpc_cost(w1_flat, Cb_ref, Cb, w2, model)
-    
-    lb = [w1_min] * N
-    ub = [w1_max] * N
-    
-    best_w1, _ = pso(
-        mpc_cost_pso,
-        lb,
-        ub,
-        swarmsize=swarm_size,
-        maxiter=max_iter,
-        debug=False
-    )
-    
-    return best_w1
