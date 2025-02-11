@@ -11,7 +11,7 @@ Y_XS = 0.5 # g/g
 Y_PX = 0.2 # g/g
 S_F = 10 # g/l
 T_START = 0
-T_END = 50
+T_END = 60
 IC = [0.05, 0.0, 10.0, 1.0]  # [X0, P0, S0, V0]
 F_0 = 0.05 # l/h
 
@@ -29,7 +29,7 @@ def plot_feeding() -> None:
     ''' Plot the feeding rate over time '''
     t = np.linspace(T_START, T_END, NUM_SAMPLES)
     plt.figure(figsize=(12, 3))
-    plt.plot(t, feeding(t))
+    plt.step(t, feeding(t))
     plt.xlabel('Time (h)')
     plt.ylabel('Feed rate (l/h)')
     plt.title('Feed rate over time')
@@ -39,10 +39,9 @@ def mu(S: float, mu_max: float = MU_MAX, K_s: float = K_S) -> float:
     return mu_max * S / (K_s + S)
     
 def simulate(mu_max: float = MU_MAX, K_s: float = K_S, Y_xs: float = Y_XS, Y_px: float = Y_PX,\
-            t_start: float = T_START, t_end: float = T_END, \
-            S_f: float = S_F, y0: list = IC, num_samples: int = NUM_SAMPLES) -> pd.DataFrame:
+            t_start: float = T_START, t_end: float = T_END, S_f: float = S_F, y0: list = IC) -> pd.DataFrame:
     """ Simulate the bioreactor model 
-    - IC = [X0, P0, S0, V0]  # initial conditions
+    - IC = [X0, P0, S0, V0] -> initial conditions
     """
     def bioreactor_model(y, t):
         X, P, S, V = y
@@ -52,10 +51,11 @@ def simulate(mu_max: float = MU_MAX, K_s: float = K_S, Y_xs: float = Y_XS, Y_px:
         dV = feeding(t)
         return [dX, dP, dS, dV]
     
-    t = np.linspace(t_start, t_end, num_samples)
+    t = np.arange(t_start, t_end, dt)
     sol = odeint(bioreactor_model, y0, t)
     
     df = pd.DataFrame(sol, columns=['X', 'P', 'S', 'V']).assign(t=t)
+    df['F'] = [feeding(i) for i in t]
     return df
 
 def generate_training_data(mu_max: float = MU_MAX, K_s: float = K_S, Y_xs: float = Y_XS, Y_px: float = Y_PX, S_f: float = S_F, samples: int = 1000):
@@ -69,7 +69,7 @@ def generate_training_data(mu_max: float = MU_MAX, K_s: float = K_S, Y_xs: float
 
     inputs, outputs = [], []
     for _ in tqdm(range(samples)):
-        F = np.random.uniform(0, 2)
+        F = np.random.uniform(0, 1)
         X = np.random.uniform(0, 6)
         S = np.random.uniform(0, 12)
         P = np.random.uniform(0, 2)
@@ -121,8 +121,8 @@ def system_of_odes(t, y, F):
     dV = F
     return [dX, dP, dS, dV]
 
-def model_predict(F, X, S, P, V, model):
-    return model.predict([[F, X, S, P, V]])[0]
+def model_predict(F, X, model):
+    return model.predict([[F, X]])[0]
 
 # --- Cost Function --- #
 def mpc_cost(F_seq, X_ref, X0, S0, P0, V0, model):
@@ -130,7 +130,7 @@ def mpc_cost(F_seq, X_ref, X0, S0, P0, V0, model):
     X, S, P, V = X0, S0, P0, V0
     for idx in range(N):
         F = F_seq[idx]
-        X, S, P, V = model_predict(F, X, S, P, V, model)
+        X = model_predict(F, X, model)
         cost += Q * (X_ref[idx] - X) ** 2
         if idx > 0:  # Penalize difference between consecutive control actions
             cost += R * (F - F_seq[idx - 1]) ** 2
@@ -140,7 +140,7 @@ def mpc_cost(F_seq, X_ref, X0, S0, P0, V0, model):
 def solve_mpc(X_ref, X, S, P, V, F_ini, model):
     
     # Linear constraints F >= 0
-    bounds = [(0, 10) for _ in range(N)]
+    bounds = [(0.05, 2) for _ in range(N)]
     
     result = minimize(
         mpc_cost, 
