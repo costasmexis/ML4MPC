@@ -39,6 +39,7 @@ L = int(TIME_RANGE / dt)      # Simulation steps
 N_p = 5                       # Prediction horizon
 Q = 1.0                       # Weight for tracking
 R = 0.1                       # Weight for control effort
+OPTIMIZATION_METHOD = 'Nelder-Mead' # Optimization method. Other options: 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
@@ -101,14 +102,23 @@ def set_point(t):
 
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
+    """ Cost function for MPC 
+    - model: 'discretized' or a trained sklearn model
+    """
     J = 0
     X_curr, S_curr, V_curr = X, S, V
     for k in range(N_p):
         X_sp = set_point(t + k * dt)
         if model == 'discretized':
             X_next, S_next, V_next = discretized_model(t, X_curr, S_curr, V_curr, F_opt[k])
-        else:            
-            X_next, S_next, V_next = model_predict(X_curr, S_curr, V_curr, F_opt[k], model)
+        elif hasattr(model, 'predict'):
+            X_next, S_next, V_next = model.predict([[X_curr, S_curr, V_curr, F_opt[k]]])[0]
+        elif hasattr(model, 'forward'):
+            # PINC
+            preds = model.forward(torch.tensor(np.array([dt, X_curr, S_curr, V_curr, F_opt[k]]), dtype=torch.float32).to(DEVICE))
+            X_next = preds[0].detach().cpu().numpy()
+            S_next = preds[1].detach().cpu().numpy()
+            V_next = preds[2].detach().cpu().numpy()
         J += Q * (X_sp - X_next) ** 2
         if k > 0:
             J += R * (F_opt[k] - F_opt[k - 1]) ** 2
@@ -127,7 +137,7 @@ def mpc(model: str = 'discretized'):
     # MPC Loop
     for step in tqdm(range(L)):
         t=step*dt
-        res = minimize(cost_function, F_0 * np.ones(N_p), args=(X[step], S[step], V[step], t, model), bounds=BOUNDS, method="SLSQP")
+        res = minimize(cost_function, F_0 * np.ones(N_p), args=(X[step], S[step], V[step], t, model), bounds=BOUNDS, method=OPTIMIZATION_METHOD)
         F[step] = res.x[0]
         sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
@@ -228,7 +238,6 @@ def generate_training_data():
         y0 = [X0, S0, V0]
         
         sol = solve_ivp(system_odes, t_span, y0, args=(F,), t_eval=np.arange(t_span[0], t_span[1], dt))
-        
         
         for i in range(len(sol.t) - 1):
             X_t = [sol.y[0, i], sol.y[1, i], sol.y[2, i], F]  # Features
@@ -385,14 +394,3 @@ def main(in_train: torch.Tensor, out_train: torch.Tensor, verbose: int = 100):
                     break
 
     return net
-
-# --- Model predition --- #
-def model_predict(X, S, V, F, model):
-    if hasattr(model, 'predict'):
-        return model.predict([[X, S, V, F]])[0]
-    elif isinstance(model, nn.Module):
-        model.eval()
-        with torch.no_grad():
-            return model(torch.tensor([dt, X, S, V, F], dtype=torch.float32).to(DEVICE)).detach().cpu().numpy()
-    else:
-        raise ValueError('Model is not supported')
