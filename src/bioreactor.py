@@ -393,6 +393,6 @@ def model_predict(X, S, V, F, model):
     elif isinstance(model, nn.Module):
         model.eval()
         with torch.no_grad():
-            return model(torch.tensor([X, S, V, F], dtype=torch.float32).to(device)).item()
+            return model(torch.tensor([dt, X, S, V, F], dtype=torch.float32).to(DEVICE)).detach().cpu().numpy()
     else:
         raise ValueError('Model is not supported')
