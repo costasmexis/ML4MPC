@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-from scipy.integrate import odeint, solve_ivp
+from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize
 from tqdm import tqdm
@@ -40,6 +39,18 @@ F_MIN = 0.0                  # l/h
 F_MAX = 2.0                  # l/h
 BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)] 
 
+# ----- Simulate system using ODEs / kinetic parameters / IC -------
+def simulate(F, plot: bool=True):
+    sol = solve_ivp(dynamic_system, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F,))
+    if plot:
+        plt.figure(figsize=(12, 4)) 
+        plt.plot(sol.t, sol.y[0], label='Biomass')
+        plt.plot(sol.t, sol.y[1], label='Substrate')
+        plt.title('Bioreactor Simulation')
+        plt.legend()
+        plt.grid()
+        plt.show()
+    return sol
 
 # ----- Bioreactor model -----
 def dynamic_system(t, y, F):
@@ -68,15 +79,18 @@ def set_point(t):
     elif 21 <= t < 40:
         return 3
     else:
-        return 5
+        return 4.5
 
 # ----- Cost function -----
-def cost_function(F_opt, X, S, V, t):
+def cost_function(F_opt, X, S, V, t, model='discretized'):
     J = 0
     X_curr, S_curr, V_curr = X, S, V
     for k in range(N_p):
         X_sp = set_point(t + k * dt)
-        X_next, S_next, V_next = discretized_model(t, X_curr, S_curr, V_curr, F_opt[k])
+        if model == 'discretized':
+            X_next, S_next, V_next = discretized_model(t, X_curr, S_curr, V_curr, F_opt[k])
+        else:            
+            X_next, S_next, V_next = model_predict(X_curr, S_curr, V_curr, F_opt[k], model)
         J += Q * (X_sp - X_next) ** 2
         if k > 0:
             J += R * (F_opt[k] - F_opt[k - 1]) ** 2
@@ -84,7 +98,7 @@ def cost_function(F_opt, X, S, V, t):
     return J
 
 # ----- MPC -----
-def mpc():
+def mpc(model: str = 'discretized'):
     # Initialize system variables
     X = np.ones(L+1)
     S = np.ones(L+1)
@@ -95,7 +109,7 @@ def mpc():
     # MPC Loop
     for step in tqdm(range(L)):
         t=step*dt
-        res = minimize(cost_function, F_0 * np.ones(N_p), args=(X[step], S[step], V[step], t), bounds=BOUNDS, method="SLSQP")
+        res = minimize(cost_function, F_0 * np.ones(N_p), args=(X[step], S[step], V[step], t, model), bounds=BOUNDS, method="SLSQP")
         F[step] = res.x[0]
         sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
@@ -109,10 +123,13 @@ def plot_results(X, F):
     plt.plot([set_point(t) for t in range(0, TIME_RANGE)], "r--", label="Setpoint")
     plt.plot(np.arange(0, TIME_RANGE+dt, dt), X, label='Biomass Concentration')
     plt.legend()
+    plt.grid()
 
     plt.subplot(2, 1, 2)
     plt.plot(np.arange(0, TIME_RANGE, dt), F, label='Feed Rate')
     plt.legend()
+    plt.grid()
+
     plt.show()
     
 
@@ -155,9 +172,57 @@ def evaluation(F):
     plt.plot(sol_t, sol_X, label='Biomass Concentration')
     plt.plot(sol_t, sol_S, label='Substrate Concentration')
     plt.legend()
+    plt.grid()
 
     plt.subplot(2, 1, 2)
     plt.plot(sol_t, F_func(sol_t), label='Feed Rate')
     plt.legend()
+    plt.grid()
 
     plt.show()
+    
+    
+    
+############### Machine Learning ################
+# -------- Generate training data --------
+def generate_training_data():
+
+    def system_odes(t, y, F):
+        X, S, V = y
+        dX_dt = (MU_MAX * S / (K_S + S)) * X - (F / V) * X
+        dS_dt = -(1 / Y_XS) * (MU_MAX * S / (K_S + S)) * X + (F / V) * (S_F - S)
+        dV_dt = F
+        return [dX_dt, dS_dt, dV_dt]
+
+    t_span = [0, TIME_RANGE]
+    X, y = [], []
+    for _ in range(NUM_SAMPLES):
+        X0 = np.random.uniform(0.1, 5)
+        S0 = np.random.uniform(5, 30)
+        V0 = np.random.uniform(0.5, 2)
+        F =  np.random.uniform(0.5, 2)
+        
+        y0 = [X0, S0, V0]
+        
+        sol = solve_ivp(system_odes, t_span, y0, args=(F,), t_eval=np.arange(t_span[0], t_span[1], dt))
+        
+        
+        for i in range(len(sol.t) - 1):
+            X_t = [sol.y[0, i], sol.y[1, i], sol.y[2, i], F]  # Features
+            y_t = [sol.y[0, i + 1], sol.y[1, i + 1], sol.y[2, i + 1]]  # Target
+            
+            X.append(X_t)
+            y.append(y_t)
+            
+    return np.array(X), np.array(y)
+
+# --- Model predition --- #
+def model_predict(X, S, V, F, model):
+    if hasattr(model, 'predict'):
+        return model.predict([[X, S, V, F]])[0]
+    # elif isinstance(model, nn.Module):
+    #     model.eval()
+    #     with torch.no_grad():
+    #         return model(torch.tensor([X, S, V, F], dtype=torch.float32).to(device)).item()
+    else:
+        raise ValueError('Model is not supported')
