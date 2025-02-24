@@ -12,6 +12,10 @@ from scipy.interpolate import interp1d
 from scipy.optimize import minimize
 from tqdm import tqdm
 
+from pyswarm import pso
+from scipy.optimize import differential_evolution
+from torchdiffeq import odeint
+
 # ----- Constants -----
 # Num of samples
 NUM_SAMPLES = 1000
@@ -50,7 +54,7 @@ BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)]
 # ----- Simulate system using ODEs / kinetic parameters / IC -------
 def simulate(F: float, plot: bool=True) -> np.ndarray:
     """ Simulate bioreactor system using ODEs 
-    - F: feed rate (asummed constant)
+    - F: feed rate (assumed constant)
     """
     sol = solve_ivp(dynamic_system, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F,), 
                     t_eval=np.arange(T_START, T_END, dt))
@@ -112,9 +116,10 @@ def cost_function(F_opt, X, S, V, t, model='discretized'):
         if model == 'discretized':
             X_next, S_next, V_next = discretized_model(t, X_curr, S_curr, V_curr, F_opt[k])
         elif hasattr(model, 'predict'):
+            # PyTorch Neural Network
             X_next, S_next, V_next = model.predict([[X_curr, S_curr, V_curr, F_opt[k]]])[0]
         elif hasattr(model, 'forward'):
-            # PINC
+            # Physics-informed neural network
             preds = model.forward(torch.tensor(np.array([dt, X_curr, S_curr, V_curr, F_opt[k]]), dtype=torch.float32).to(DEVICE))
             X_next = preds[0].detach().cpu().numpy()
             S_next = preds[1].detach().cpu().numpy()
@@ -139,6 +144,69 @@ def mpc(model: str = 'discretized'):
         t=step*dt
         res = minimize(cost_function, F_0 * np.ones(N_p), args=(X[step], S[step], V[step], t, model), bounds=BOUNDS, method=OPTIMIZATION_METHOD)
         F[step] = res.x[0]
+        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
+        X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
+
+    return X, S, V, F
+
+# ----- MPC with PSO -----
+def mpc_pso(model: str = 'discretized'):
+    # Initialize system variables
+    X = np.ones(L+1)
+    S = np.ones(L+1)
+    V = np.ones(L+1)
+    F = np.ones(L)
+    X[0], S[0], V[0] = X_0, S_0, V_0
+    
+    # Define the cost function for GA
+    def ga_cost_function(F_opt, X_current, S_current, V_current, t_current, model):
+        return cost_function(F_opt, X_current, S_current, V_current, t_current, model)
+    
+    # MPC Loop
+    for step in tqdm(range(L)):
+        t = step * dt
+        # Use GA to optimize the cost function
+        F_opt, _ = pso(ga_cost_function, lb=[F_MIN]*N_p, ub=[F_MAX]*N_p, args=(X[step], S[step], V[step], t, model))
+        F[step] = F_opt[0]
+        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
+        X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
+
+    return X, S, V, F
+
+# ----- MPC with differential evolution -----
+def mpc_diff_evol(model: str = 'discretized'):
+    # Initialize system variables
+    X = np.ones(L + 1)
+    S = np.ones(L + 1)
+    V = np.ones(L + 1)
+    F = np.ones(L)
+    X[0], S[0], V[0] = X_0, S_0, V_0
+
+    # MPC Loop
+    for step in tqdm(range(L)):
+        t = step * dt
+
+        # Define the bounds for F
+        bounds = [(F_MIN, F_MAX) for _ in range(N_p)]  # BOUNDS should be a list of tuples, e.g., [(F_min, F_max)]
+
+        # Use Differential Evolution to optimize the cost function
+        res = differential_evolution(
+            cost_function,  # Cost function to minimize
+            bounds,  # Bounds for F
+            args=(X[step], S[step], V[step], t, model),  # Additional arguments for cost_function
+            strategy='best1bin',  # Mutation strategy
+            maxiter=50,  # Maximum number of iterations
+            popsize=10,  # Population size
+            tol=1e-6,  # Tolerance for convergence
+            mutation=(0.5, 1),  # Mutation factor range
+            recombination=0.7,  # Crossover probability
+            seed=42  # Random seed for reproducibility
+        )
+
+        # Extract the optimized F value
+        F[step] = res.x[0]
+
+        # Integrate the system dynamics
         sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
 
@@ -194,7 +262,7 @@ def evaluation(F):
     sol_S = np.array(sol_S)
     sol_V = np.array(sol_V)
 
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(12, 18))
     plt.subplot(3, 1, 1)
     plt.plot([set_point(t) for t in range(0, TIME_RANGE)], "r--", label="Setpoint")
     plt.plot(sol_t, sol_X, label='Biomass Concentration')
@@ -394,3 +462,5 @@ def main(in_train: torch.Tensor, out_train: torch.Tensor, verbose: int = 100):
                     break
 
     return net
+
+
