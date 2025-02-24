@@ -11,7 +11,7 @@ NUM_SAMPLES = 1000
 
 # Kinetic parameters
 MU_MAX = 0.20 # 1/h
-K_S = 1       # g/l
+K_S = 1.0       # g/l
 Y_XS = 0.5    # g/g
 Y_PX = 0.2    # g/g
 S_F = 10      # g/l
@@ -20,11 +20,10 @@ S_F = 10      # g/l
 X_0 = 0.05
 S_0 = 10.0
 V_0 = 1.0
-F_0 = 1
 
 # Time parameters
 T_START = 0
-T_END = 80
+T_END = 50
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
@@ -36,19 +35,31 @@ R = 0.1                       # Weight for control effort
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
-F_MAX = 2.0                  # l/h
+F_MAX = 0.5                  # l/h
+F_0 = (F_MAX + F_MIN) / 2    # Initial feed rate
 BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)] 
 
 # ----- Simulate system using ODEs / kinetic parameters / IC -------
-def simulate(F, plot: bool=True):
-    sol = solve_ivp(dynamic_system, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F,))
+def simulate(F: float, plot: bool=True) -> np.ndarray:
+    """ Simulate bioreactor system using ODEs 
+    - F: feed rate (asummed constant)
+    """
+    sol = solve_ivp(dynamic_system, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F,), 
+                    t_eval=np.arange(T_START, T_END, dt))
     if plot:
-        plt.figure(figsize=(12, 4)) 
+        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 1, 1)
         plt.plot(sol.t, sol.y[0], label='Biomass')
         plt.plot(sol.t, sol.y[1], label='Substrate')
         plt.title('Bioreactor Simulation')
         plt.legend()
         plt.grid()
+
+        plt.subplot(2, 1, 2)
+        plt.plot(sol.t, sol.y[2], label='Volume')
+        plt.legend()
+        plt.grid()
+
         plt.show()
     return sol
 
@@ -167,15 +178,20 @@ def evaluation(F):
     sol_V = np.array(sol_V)
 
     plt.figure(figsize=(12, 6))
-    plt.subplot(2, 1, 1)
+    plt.subplot(3, 1, 1)
     plt.plot([set_point(t) for t in range(0, TIME_RANGE)], "r--", label="Setpoint")
     plt.plot(sol_t, sol_X, label='Biomass Concentration')
     plt.plot(sol_t, sol_S, label='Substrate Concentration')
     plt.legend()
     plt.grid()
 
-    plt.subplot(2, 1, 2)
+    plt.subplot(3, 1, 2)
     plt.plot(sol_t, F_func(sol_t), label='Feed Rate')
+    plt.legend()
+    plt.grid()
+    
+    plt.subplot(3, 1, 3)
+    plt.plot(sol_t, sol_V, label='Volume')
     plt.legend()
     plt.grid()
 
