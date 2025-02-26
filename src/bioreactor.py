@@ -14,7 +14,6 @@ from tqdm import tqdm
 
 from pyswarm import pso
 from scipy.optimize import differential_evolution
-from torchdiffeq import odeint
 
 # ----- Constants -----
 # Num of samples
@@ -38,16 +37,16 @@ T_END = 50
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 1                       # Time step
+dt = 0.5                       # Time step
 L = int(TIME_RANGE / dt)      # Simulation steps
-N_p = 5                       # Prediction horizon
+N_p = 3                    # Prediction horizon
 Q = 1.0                       # Weight for tracking
 R = 0.1                       # Weight for control effort
 OPTIMIZATION_METHOD = 'Nelder-Mead' # Optimization method. Other options: 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
-F_MAX = 0.5                  # l/h
+F_MAX = 1.0                  # l/h
 F_0 = (F_MAX + F_MIN) / 2    # Initial feed rate
 BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)] 
 
@@ -97,9 +96,9 @@ def discretized_model(t, X, S, V, F, h=0.1):
 
 # ----- Set-point trajectory func -----
 def set_point(t):
-    if t <= 20:
+    if t <= 12:
         return 1.5
-    elif 21 <= t < 40:
+    elif 12 <= t < 40:
         return 3
     else:
         return 4.5
