@@ -20,48 +20,69 @@ from scipy.optimize import differential_evolution
 NUM_SAMPLES = 1000
 
 # Kinetic parameters
-MU_MAX = 0.20 # 1/h
-K_S = 1.0       # g/l
-Y_XS = 0.5    # g/g
-Y_PX = 0.2    # g/g
-S_F = 10      # g/l
+MU_MAX = 0.870       # 1/h
+K_S    = 0.215       # g/l
+Y_XS   = 0.496       # g/g
+Y_PX   = 0.2         # g/g
+S_F    = 1.43 * 200  # g/l
 
 # Initial conditions
-X_0 = 0.05
-S_0 = 10.0
-V_0 = 1.0
+X_0 = 5.85
+S_0 = 0.013
+V_0 = 1.56
 
 # Time parameters
 T_START = 0
-T_END = 50
+T_END = 5
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 0.5                       # Time step
+dt = 0.1                       # Time step
 L = int(TIME_RANGE / dt)      # Simulation steps
-N_p = 3                    # Prediction horizon
+N_p = 7                    # Prediction horizon
 Q = 1.0                       # Weight for tracking
-R = 0.1                       # Weight for control effort
-OPTIMIZATION_METHOD = 'Nelder-Mead' # Optimization method. Other options: 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
+R = 0.8                       # Weight for control effort
+OPTIMIZATION_METHOD = 'SLSQP' # Optimization method. Other options: 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
-F_MAX = 1.0                  # l/h
+F_MAX = 0.1                  # l/h
 F_0 = (F_MAX + F_MIN) / 2    # Initial feed rate
 BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)] 
 
-# ----- Simulate system using ODEs / kinetic parameters / IC -------
-def simulate(F: float, plot: bool=True) -> np.ndarray:
+############## Simulate system using ODEs / kinetic parameters / IC #############
+def plant_model(t, y, F_func: callable):
+    X, S, V = y
+    F = F_func(t)
+    dX_dt = (MU_MAX * S / (K_S + S)) * X - (F / V) * X
+    dS_dt = -(1 / Y_XS) * (MU_MAX * S / (K_S + S)) * X + (F / V) * (S_F - S)
+    dV_dt = F
+    return [dX_dt, dS_dt, dV_dt]
+
+def simulate(F: callable, plot: bool=True) -> np.ndarray:
     """ Simulate bioreactor system using ODEs 
     - F: feed rate (assumed constant)
     """
-    sol = solve_ivp(dynamic_system, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F,), 
-                    t_eval=np.arange(T_START, T_END, dt))
+    t_points = np.arange(T_START, T_END, dt)
+    F_func = interp1d(t_points, [F(t) for t in t_points], kind="linear", fill_value="extrapolate")
+    
+    sol = solve_ivp(plant_model, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F_func,), t_eval=np.arange(T_START, T_END, dt))
     if plot:
         plt.figure(figsize=(12, 8))
         plt.subplot(2, 1, 1)
         plt.plot(sol.t, sol.y[0], label='Biomass')
         plt.plot(sol.t, sol.y[1], label='Substrate')
+        ax1 = plt.subplot(2, 1, 1)
+        ax1.plot(sol.t, sol.y[0], label='Biomass')
+        ax1.plot(sol.t, sol.y[1], label='Substrate')
+        ax1.set_title('Bioreactor Simulation')
+        ax1.legend()
+        ax1.grid()
+
+        ax2 = ax1.twinx()
+        ax2.step(sol.t, [F(t) for t in sol.t], label='Feed Rate', color='gray', linestyle='--')
+        ax2.set_ylabel('Feed Rate')
+        ax2.legend(loc='upper right')
         plt.title('Bioreactor Simulation')
         plt.legend()
         plt.grid()
@@ -74,6 +95,7 @@ def simulate(F: float, plot: bool=True) -> np.ndarray:
         plt.show()
     return sol
 
+############# Discretized model #############
 # ----- Bioreactor model -----
 def dynamic_system(t, y, F):
     X, S, V = y
@@ -82,7 +104,6 @@ def dynamic_system(t, y, F):
     dV_dt = F
     return np.array([dX_dt, dS_dt, dV_dt])
 
-# ------ Discretized model -----
 def discretized_model(t, X, S, V, F, h=0.1):
     k1 = dynamic_system(t, [X, S, V], F)
     k2 = dynamic_system(t + h / 2, [X + k1[0] * h / 2, S + k1[1] * h / 2, V + k1[2] * h / 2], F)
@@ -94,14 +115,15 @@ def discretized_model(t, X, S, V, F, h=0.1):
     V_next = V + (h / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2])
     return X_next, S_next, V_next
 
+############# Model Predictive Control #############
 # ----- Set-point trajectory func -----
 def set_point(t):
-    if t <= 12:
-        return 1.5
-    elif 12 <= t < 40:
-        return 3
+    if t <= 2.5:
+        return 10
+    elif 2.5 <= t < 5:
+        return 15
     else:
-        return 4.5
+        return 20
 
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
@@ -215,7 +237,7 @@ def mpc_diff_evol(model: str = 'discretized'):
 def plot_results(X, F):
     plt.figure(figsize=(12, 6))
     plt.subplot(2, 1, 1)
-    plt.plot([set_point(t) for t in range(0, TIME_RANGE)], "r--", label="Setpoint")
+    plt.step([set_point(t) for t in range(0, TIME_RANGE+1)], "r--", label="Setpoint")
     plt.plot(np.arange(0, TIME_RANGE+dt, dt), X, label='Biomass Concentration')
     plt.legend()
     plt.grid()
@@ -226,20 +248,12 @@ def plot_results(X, F):
     plt.grid()
 
     plt.show()
-    
 
+############# Evaluation #############
 # -------- Evaluate MPC solving system of ODEs --------
 def evaluation(F):
     t_points = np.arange(0, TIME_RANGE, dt)
     F_func = interp1d(t_points, F, kind="linear", fill_value="extrapolate")
-
-    def plant_model(t, y):
-        X, S, V = y
-        F = F_func(t)
-        dX_dt = (MU_MAX * S / (K_S + S)) * X - (F / V) * X
-        dS_dt = -(1 / Y_XS) * (MU_MAX * S / (K_S + S)) * X + (F / V) * (S_F - S)
-        dV_dt = F
-        return [dX_dt, dS_dt, dV_dt]
 
     y0 = [X_0, S_0, V_0]
     times = np.arange(0, TIME_RANGE, dt)
@@ -249,8 +263,8 @@ def evaluation(F):
     sol_V = [V_0]
 
     for i in range(len(times)-1):
-        sol = solve_ivp(plant_model, [times[i], times[i+1]], y0, method='RK45')
-        y0 = sol.y[:, -1] # Update initial condition
+        sol = solve_ivp(plant_model, t_span=[times[i], times[i+1]], y0=y0, args=(F_func,), method='RK45')
+        y0 = sol.y[:, -1]  # Update initial condition
         sol_t.append(times[i+1])
         sol_X.append(y0[0])
         sol_S.append(y0[1])
@@ -283,7 +297,7 @@ def evaluation(F):
     
     
     
-############### Machine Learning ################
+############# Machine Learning #############
 # -------- Generate training data --------
 def generate_training_data():
 
@@ -316,7 +330,7 @@ def generate_training_data():
     return np.array(X), np.array(y)
 
    
-####### Physics-Informed Neural Network #######
+####################Physics-Informed Neural Network #############
 NUM_EPOCHS = 50000
 LEARNING_RATE = 1e-2
 NUM_COLLOCATION = 10000
