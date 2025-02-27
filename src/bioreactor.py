@@ -104,7 +104,7 @@ def dynamic_system(t, y, F):
     dV_dt = F
     return np.array([dX_dt, dS_dt, dV_dt])
 
-def discretized_model(t, X, S, V, F, h=0.1):
+def discretized_model(t, X, S, V, F, h=0.01):
     k1 = dynamic_system(t, [X, S, V], F)
     k2 = dynamic_system(t + h / 2, [X + k1[0] * h / 2, S + k1[1] * h / 2, V + k1[2] * h / 2], F)
     k3 = dynamic_system(t + h / 2, [X + k2[0] * h / 2, S + k2[1] * h / 2, V + k2[2] * h / 2], F)
@@ -277,7 +277,7 @@ def evaluation(F):
 
     plt.figure(figsize=(12, 18))
     plt.subplot(3, 1, 1)
-    plt.plot([set_point(t) for t in range(0, TIME_RANGE)], "r--", label="Setpoint")
+    plt.step([set_point(t) for t in range(T_START, T_END+1)], "r--", label="Setpoint")
     plt.plot(sol_t, sol_X, label='Biomass Concentration')
     plt.plot(sol_t, sol_S, label='Substrate Concentration')
     plt.legend()
