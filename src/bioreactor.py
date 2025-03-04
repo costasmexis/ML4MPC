@@ -1,6 +1,4 @@
 import copy
-import sys
-from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -37,12 +35,12 @@ T_END = 5
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 0.1                       # Time step
+dt = 0.1                      # Time step
 L = int(TIME_RANGE / dt)      # Simulation steps
-N_p = 7                    # Prediction horizon
+N_p = 7                       # Prediction horizon
 Q = 1.0                       # Weight for tracking
 R = 0.8                       # Weight for control effort
-OPTIMIZATION_METHOD = 'SLSQP' # Optimization method. Other options: 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
+OPTIMIZATION_METHOD = 'SLSQP' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
@@ -118,12 +116,14 @@ def discretized_model(t, X, S, V, F, h=0.01):
 ############# Model Predictive Control #############
 # ----- Set-point trajectory func -----
 def set_point(t):
-    if t <= 2.5:
-        return 10
-    elif 2.5 <= t < 5:
-        return 15
-    else:
-        return 20
+    # if t <= 2.5:
+    #     return 10
+    # elif 2.5 <= t < 5:
+    #     return 15
+    # else:
+    #     return 20
+    return X_0 * np.exp(0.3 * t)
+
 
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
@@ -235,10 +235,13 @@ def mpc_diff_evol(model: str = 'discretized'):
 
 # ----- Plot MPC results -----
 def plot_results(X, F):
+    times = np.arange(0, TIME_RANGE+1, dt)
+    SP = [set_point(t) for t in times]
+    
     plt.figure(figsize=(12, 6))
     plt.subplot(2, 1, 1)
-    plt.step([set_point(t) for t in range(0, TIME_RANGE+1)], "r--", label="Setpoint")
     plt.plot(np.arange(0, TIME_RANGE+dt, dt), X, label='Biomass Concentration')
+    plt.plot(times, SP, 'r--', label='Setpoint')
     plt.legend()
     plt.grid()
 
@@ -256,7 +259,7 @@ def evaluation(F):
     F_func = interp1d(t_points, F, kind="linear", fill_value="extrapolate")
 
     y0 = [X_0, S_0, V_0]
-    times = np.arange(0, TIME_RANGE, dt)
+    times = np.arange(0, TIME_RANGE+1, dt)
     sol_t = [0]
     sol_X = [X_0]
     sol_S = [S_0]
@@ -277,7 +280,7 @@ def evaluation(F):
 
     plt.figure(figsize=(12, 18))
     plt.subplot(3, 1, 1)
-    plt.step([set_point(t) for t in range(T_START, T_END+1)], "r--", label="Setpoint")
+    plt.plot(times, [set_point(t) for t in times], "r--", label="Setpoint")
     plt.plot(sol_t, sol_X, label='Biomass Concentration')
     plt.plot(sol_t, sol_S, label='Substrate Concentration')
     plt.legend()
