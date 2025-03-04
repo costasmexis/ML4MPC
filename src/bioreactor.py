@@ -40,7 +40,7 @@ L = int(TIME_RANGE / dt)      # Simulation steps
 N_p = 7                       # Prediction horizon
 Q = 1.0                       # Weight for tracking
 R = 0.8                       # Weight for control effort
-OPTIMIZATION_METHOD = 'SLSQP' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
+OPTIMIZATION_METHOD = 'L-BFGS-B' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
@@ -102,7 +102,7 @@ def dynamic_system(t, y, F):
     dV_dt = F
     return np.array([dX_dt, dS_dt, dV_dt])
 
-def discretized_model(t, X, S, V, F, h=0.01):
+def discretized_model(t, X, S, V, F, h=0.1):
     k1 = dynamic_system(t, [X, S, V], F)
     k2 = dynamic_system(t + h / 2, [X + k1[0] * h / 2, S + k1[1] * h / 2, V + k1[2] * h / 2], F)
     k3 = dynamic_system(t + h / 2, [X + k2[0] * h / 2, S + k2[1] * h / 2, V + k2[2] * h / 2], F)
@@ -118,10 +118,8 @@ def discretized_model(t, X, S, V, F, h=0.01):
 def set_point(t):
     # if t <= 2.5:
     #     return 10
-    # elif 2.5 <= t < 5:
-    #     return 15
     # else:
-    #     return 20
+    #     return 15
     return X_0 * np.exp(0.3 * t)
 
 
@@ -235,12 +233,13 @@ def mpc_diff_evol(model: str = 'discretized'):
 
 # ----- Plot MPC results -----
 def plot_results(X, F):
-    times = np.arange(0, TIME_RANGE+1, dt)
+    
+    times = np.arange(0, TIME_RANGE+dt, dt)
     SP = [set_point(t) for t in times]
     
     plt.figure(figsize=(12, 6))
     plt.subplot(2, 1, 1)
-    plt.plot(np.arange(0, TIME_RANGE+dt, dt), X, label='Biomass Concentration')
+    plt.plot(times, X, label='Biomass Concentration')
     plt.plot(times, SP, 'r--', label='Setpoint')
     plt.legend()
     plt.grid()
@@ -255,11 +254,12 @@ def plot_results(X, F):
 ############# Evaluation #############
 # -------- Evaluate MPC solving system of ODEs --------
 def evaluation(F):
+    
     t_points = np.arange(0, TIME_RANGE, dt)
     F_func = interp1d(t_points, F, kind="linear", fill_value="extrapolate")
 
     y0 = [X_0, S_0, V_0]
-    times = np.arange(0, TIME_RANGE+1, dt)
+    times = np.arange(0, TIME_RANGE+dt, dt)
     sol_t = [0]
     sol_X = [X_0]
     sol_S = [S_0]
