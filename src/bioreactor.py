@@ -37,22 +37,22 @@ TIME_RANGE = int(T_END - T_START) # Absolute time
 # MPC parameters
 dt = 0.1                         # Time step
 L = int(TIME_RANGE / dt)         # Simulation steps
-N_p = 12                          # Prediction horizon
-Q = 1.0                          # Weight for tracking
-Q_term = 0                     # Weight for terminal state
-R = 0.2                            # Weight for control effort
-OPTIMIZATION_METHOD = 'COBYLA' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
+N_p = 3                          # Prediction horizon
+Q = 1.5                          # Weight for tracking
+Q_term = 0.0                     # Weight for terminal state
+R = 0.1                            # Weight for control effort
+OPTIMIZATION_METHOD = 'trust-constr' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
 F_MAX = 0.1                  # l/h
 DELTA_F_MAX = 0.05           # Maximum change in feed rate
-F_0 = (F_MAX + F_MIN) / 2    # Initial feed rate
+F_0 = (F_MAX - F_MIN) / 2    # Initial feed rate
 BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)] 
 
 # Constraints for volume and substrate concentration
 V_MAX = 2.0  # Maximum volume
-S_MAX = 0.02 # Maximum substrate concentration
+S_MAX = 2 # Maximum substrate concentration
 w_S = 0.0    # Weight for substrate constraint
 w_V = 0.0    # Weight for volume constraint
 
@@ -111,7 +111,7 @@ def dynamic_system(t, y, F):
     dV_dt = F
     return np.array([dX_dt, dS_dt, dV_dt])
 
-def discretized_model(t, X, S, V, F, h=0.1):
+def discretized_model(t, X, S, V, F, h=0.01):
     k1 = dynamic_system(t, [X, S, V], F)
     k2 = dynamic_system(t + h / 2, [X + k1[0] * h / 2, S + k1[1] * h / 2, V + k1[2] * h / 2], F)
     k3 = dynamic_system(t + h / 2, [X + k2[0] * h / 2, S + k2[1] * h / 2, V + k2[2] * h / 2], F)
@@ -125,10 +125,7 @@ def discretized_model(t, X, S, V, F, h=0.1):
 ############# Model Predictive Control #############
 # ----- Set-point trajectory func -----
 def set_point(t):
-    if t <= 2:
-        return 12
-    else:
-        return 25
+    return 25
 
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
@@ -151,16 +148,20 @@ def cost_function(F_opt, X, S, V, t, model='discretized'):
             S_next = preds[1].detach().cpu().numpy()
             V_next = preds[2].detach().cpu().numpy()
             
+        J += Q * (X_sp - X_next) ** 2
+
         # Penalize violation on S constraint
         J += w_S * max(0, S_next - S_MAX)**2
         # Penalize violation o V constraint
         J += w_V * max(0, V_next - V_MAX)**2
-            
-        J += Q * (X_sp - X_next) ** 2
+               
         if k > 0:
             J += R * (F_opt[k] - F_opt[k - 1]) ** 2
+
         X_curr, S_curr, V_curr = X_next, S_next, V_next
+
     J += Q_term * (X_sp - X_next) ** 2
+
     return J
 
 # ----- Optimization Constraints -----
@@ -185,8 +186,7 @@ def mpc(model: str = 'discretized'):
         t=step*dt
         # Constraints
         constraints = [{'type': 'ineq', 'fun': delta_F_constraint}]
-        res = minimize(cost_function, F_opt_prev, args=(X[step], S[step], V[step], t, model), 
-                       constraints=constraints, bounds=BOUNDS, method=OPTIMIZATION_METHOD)
+        res = minimize(cost_function, F_opt_prev, args=(X[step], S[step], V[step], t, model), constraints=constraints, bounds=BOUNDS, method=OPTIMIZATION_METHOD, tol=1e-6)
         if res.success:
             F[step] = res.x[0]
             F_opt_prev = res.x
@@ -194,9 +194,15 @@ def mpc(model: str = 'discretized'):
             print(f"Warning: Optimization failed at step {step}, using previous F value")
             F[step] = F[step - 1] if step > 0 else F_0  # Use fallback strategy
             F_opt_prev = np.roll(F_opt_prev, -1)  # Shift the previous optimal F values
+            
         sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), t_eval=[t+dt], method='RK45')
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
-
+        
+        # TODO: Maybe add noise to the system states to simulate real-world conditions
+        # X[step + 1] += np.random.normal(0, X[step + 1] * 0.05)
+        # S[step + 1] += np.random.normal(0, S[step + 1] * 0.05)
+        # V[step + 1] += np.random.normal(0, V[step + 1] * 0.05)
+        
     return X, S, V, F
 
 # ----- MPC with PSO -----
