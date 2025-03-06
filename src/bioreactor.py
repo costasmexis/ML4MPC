@@ -35,12 +35,12 @@ T_END = 5
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 0.25                         # Time step
+dt = 0.1                         # Time step
 L = int(TIME_RANGE / dt)         # Simulation steps
-N_p = 5                          # Prediction horizon
-Q = 2.0                          # Weight for tracking
-Q_term = 1.5                     # Weight for terminal state
-R = 3                            # Weight for control effort
+N_p = 12                          # Prediction horizon
+Q = 1.0                          # Weight for tracking
+Q_term = 0                     # Weight for terminal state
+R = 0.2                            # Weight for control effort
 OPTIMIZATION_METHOD = 'L-BFGS-B' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
@@ -66,6 +66,7 @@ def simulate(F: callable, plot: bool=True) -> np.ndarray:
     F_func = interp1d(t_points, [F(t) for t in t_points], kind="linear", fill_value="extrapolate")
     
     sol = solve_ivp(plant_model, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F_func,), t_eval=np.arange(T_START, T_END, dt))
+    print(f'Maximum biomass concentration: {np.max(sol.y[0]):.2f} g/l at time {sol.t[np.argmax(sol.y[0])]:.2f} hours')
     if plot:
         plt.figure(figsize=(12, 8))
         plt.subplot(2, 1, 1)
@@ -153,18 +154,27 @@ def cost_function(F_opt, X, S, V, t, model='discretized'):
 # ----- MPC -----
 def mpc(model: str = 'discretized'):
     # Initialize system variables
-    X = np.ones(L+1)
-    S = np.ones(L+1)
-    V = np.ones(L+1)
-    F = np.ones(L)
+    X = np.empty(L+1)
+    S = np.empty(L+1)
+    V = np.empty(L+1)
+    F = np.empty(L)
     X[0], S[0], V[0] = X_0, S_0, V_0
     
+    # Warm start
+    F_opt_prev = F_0 * np.ones(N_p) # Initial guess     
+  
     # MPC Loop
     for step in tqdm(range(L)):
         t=step*dt
-        res = minimize(cost_function, F_0 * np.ones(N_p), args=(X[step], S[step], V[step], t, model), bounds=BOUNDS, method=OPTIMIZATION_METHOD)
-        F[step] = res.x[0]
-        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
+        res = minimize(cost_function, F_opt_prev, args=(X[step], S[step], V[step], t, model), bounds=BOUNDS, method=OPTIMIZATION_METHOD)
+        if res.success:
+            F[step] = res.x[0]
+            F_opt_prev = res.x
+        else:
+            print(f"Warning: Optimization failed at step {step}, using previous F value")
+            F[step] = F[step - 1] if step > 0 else F_0  # Use fallback strategy
+            F_opt_prev = np.roll(F_opt_prev, -1)  # Shift the previous optimal F values
+        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), t_eval=[t+dt])
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
 
     return X, S, V, F
@@ -281,6 +291,8 @@ def evaluation(F):
     sol_S = np.array(sol_S)
     sol_V = np.array(sol_V)
 
+    print(f'Maximum biomass concentration: {np.max(sol_X):.2f} g/l at time {sol_t[np.argmax(sol_X)]:.2f} hours')
+    
     plt.figure(figsize=(12, 18))
     plt.subplot(3, 1, 1)
     plt.step(times, [set_point(t) for t in times], "r--", label="Setpoint")
