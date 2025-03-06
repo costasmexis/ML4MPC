@@ -41,11 +41,12 @@ N_p = 12                          # Prediction horizon
 Q = 1.0                          # Weight for tracking
 Q_term = 0                     # Weight for terminal state
 R = 0.2                            # Weight for control effort
-OPTIMIZATION_METHOD = 'L-BFGS-B' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
+OPTIMIZATION_METHOD = 'COBYLA' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
 F_MAX = 0.1                  # l/h
+DELTA_F_MAX = 0.05           # Maximum change in feed rate
 F_0 = (F_MAX + F_MIN) / 2    # Initial feed rate
 BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)] 
 
@@ -123,7 +124,6 @@ def set_point(t):
     else:
         return 25
 
-
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
     """ Cost function for MPC 
@@ -151,6 +151,11 @@ def cost_function(F_opt, X, S, V, t, model='discretized'):
     J += Q_term * (X_sp - X_next) ** 2
     return J
 
+# ----- Optimization Constraints -----
+def delta_F_constraint(F_opt):
+    delta_F = np.diff(F_opt)
+    return 0.05 - np.abs(delta_F) # Constraint: |delta_F| <= 0.05
+
 # ----- MPC -----
 def mpc(model: str = 'discretized'):
     # Initialize system variables
@@ -166,7 +171,10 @@ def mpc(model: str = 'discretized'):
     # MPC Loop
     for step in tqdm(range(L)):
         t=step*dt
-        res = minimize(cost_function, F_opt_prev, args=(X[step], S[step], V[step], t, model), bounds=BOUNDS, method=OPTIMIZATION_METHOD)
+        # Constraints
+        constraints = [{'type': 'ineq', 'fun': delta_F_constraint}]
+        res = minimize(cost_function, F_opt_prev, args=(X[step], S[step], V[step], t, model), 
+                       constraints=constraints, bounds=BOUNDS, method=OPTIMIZATION_METHOD)
         if res.success:
             F[step] = res.x[0]
             F_opt_prev = res.x
@@ -174,7 +182,7 @@ def mpc(model: str = 'discretized'):
             print(f"Warning: Optimization failed at step {step}, using previous F value")
             F[step] = F[step - 1] if step > 0 else F_0  # Use fallback strategy
             F_opt_prev = np.roll(F_opt_prev, -1)  # Shift the previous optimal F values
-        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), t_eval=[t+dt])
+        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), t_eval=[t+dt], method='RK45')
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
 
     return X, S, V, F
