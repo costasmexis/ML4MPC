@@ -35,11 +35,12 @@ T_END = 5
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 0.1                      # Time step
-L = int(TIME_RANGE / dt)      # Simulation steps
-N_p = 7                       # Prediction horizon
-Q = 1.0                       # Weight for tracking
-R = 0.8                       # Weight for control effort
+dt = 0.25                         # Time step
+L = int(TIME_RANGE / dt)         # Simulation steps
+N_p = 5                          # Prediction horizon
+Q = 2.0                          # Weight for tracking
+Q_term = 1.5                     # Weight for terminal state
+R = 3                            # Weight for control effort
 OPTIMIZATION_METHOD = 'L-BFGS-B' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
@@ -116,11 +117,10 @@ def discretized_model(t, X, S, V, F, h=0.1):
 ############# Model Predictive Control #############
 # ----- Set-point trajectory func -----
 def set_point(t):
-    # if t <= 2.5:
-    #     return 10
-    # else:
-    #     return 15
-    return X_0 * np.exp(0.3 * t)
+    if t <= 2:
+        return 12
+    else:
+        return 25
 
 
 # ----- Cost function -----
@@ -147,6 +147,7 @@ def cost_function(F_opt, X, S, V, t, model='discretized'):
         if k > 0:
             J += R * (F_opt[k] - F_opt[k - 1]) ** 2
         X_curr, S_curr, V_curr = X_next, S_next, V_next
+    J += Q_term * (X_sp - X_next) ** 2
     return J
 
 # ----- MPC -----
@@ -237,10 +238,12 @@ def plot_results(X, F):
     times = np.arange(0, TIME_RANGE+dt, dt)
     SP = [set_point(t) for t in times]
     
+    print(f'Maximum biomass concentration: {np.max(X):.2f} g/l at time {np.argmax(X)*dt:.2f} hours')
+    
     plt.figure(figsize=(12, 6))
     plt.subplot(2, 1, 1)
     plt.plot(times, X, label='Biomass Concentration')
-    plt.plot(times, SP, 'r--', label='Setpoint')
+    plt.step(times, SP, 'r--', label='Setpoint')
     plt.legend()
     plt.grid()
 
@@ -280,7 +283,7 @@ def evaluation(F):
 
     plt.figure(figsize=(12, 18))
     plt.subplot(3, 1, 1)
-    plt.plot(times, [set_point(t) for t in times], "r--", label="Setpoint")
+    plt.step(times, [set_point(t) for t in times], "r--", label="Setpoint")
     plt.plot(sol_t, sol_X, label='Biomass Concentration')
     plt.plot(sol_t, sol_S, label='Substrate Concentration')
     plt.legend()
@@ -299,11 +302,10 @@ def evaluation(F):
     plt.show()
     
     
-    
 ############# Machine Learning #############
 # -------- Generate training data --------
 def generate_training_data():
-
+    ''' Generate training data for standard ML models '''
     def system_odes(t, y, F):
         X, S, V = y
         dX_dt = (MU_MAX * S / (K_S + S)) * X - (F / V) * X
@@ -311,13 +313,13 @@ def generate_training_data():
         dV_dt = F
         return [dX_dt, dS_dt, dV_dt]
 
-    t_span = [0, TIME_RANGE]
+    t_span = [T_START, T_END]
     X, y = [], []
     for _ in range(NUM_SAMPLES):
-        X0 = np.random.uniform(0.1, 5)
-        S0 = np.random.uniform(5, 30)
-        V0 = np.random.uniform(0.5, 2)
-        F =  np.random.uniform(0.5, 2)
+        X0 = np.random.uniform(X_0, 30)
+        S0 = np.random.uniform(S_0, 5)
+        V0 = np.random.uniform(V_0, 3)
+        F =  np.random.uniform(F_MIN, F_MAX)
         
         y0 = [X0, S0, V0]
         
