@@ -50,6 +50,12 @@ DELTA_F_MAX = 0.05           # Maximum change in feed rate
 F_0 = (F_MAX + F_MIN) / 2    # Initial feed rate
 BOUNDS = [(F_MIN, F_MAX) for _ in range(N_p)] 
 
+# Constraints for volume and substrate concentration
+V_MAX = 2.0  # Maximum volume
+S_MAX = 0.02 # Maximum substrate concentration
+w_S = 0.0    # Weight for substrate constraint
+w_V = 0.0    # Weight for volume constraint
+
 ############## Simulate system using ODEs / kinetic parameters / IC #############
 def plant_model(t, y, F_func: callable):
     X, S, V = y
@@ -144,6 +150,12 @@ def cost_function(F_opt, X, S, V, t, model='discretized'):
             X_next = preds[0].detach().cpu().numpy()
             S_next = preds[1].detach().cpu().numpy()
             V_next = preds[2].detach().cpu().numpy()
+            
+        # Penalize violation on S constraint
+        J += w_S * max(0, S_next - S_MAX)**2
+        # Penalize violation o V constraint
+        J += w_V * max(0, V_next - V_MAX)**2
+            
         J += Q * (X_sp - X_next) ** 2
         if k > 0:
             J += R * (F_opt[k] - F_opt[k - 1]) ** 2
