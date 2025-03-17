@@ -35,13 +35,13 @@ T_END = 5
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 0.1                         # Time step
+dt = 0.005                         # Time step
 L = int(TIME_RANGE / dt)         # Simulation steps
 N_p = 3                          # Prediction horizon
 Q = 1.5                          # Weight for tracking
 Q_term = 0.0                     # Weight for terminal state
 R = 0.1                            # Weight for control effort
-OPTIMIZATION_METHOD = 'trust-constr' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
+OPTIMIZATION_METHOD = 'SLSQP' # Optimization method. Other options: 'SLSQP, 'L-BFGS-B', 'trust-constr', 'COBYLA', 'Powell', 'Nelder-Mead'
 
 # Bounds for feeding rate
 F_MIN = 0.0                  # l/h
@@ -125,7 +125,7 @@ def discretized_model(t, X, S, V, F, h=0.01):
 ############# Model Predictive Control #############
 # ----- Set-point trajectory func -----
 def set_point(t):
-    return 25
+    return 50
 
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
