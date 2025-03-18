@@ -125,7 +125,7 @@ def discretized_model(t, X, S, V, F, h=0.01):
 ############# Model Predictive Control #############
 # ----- Set-point trajectory func -----
 def set_point(t):
-    return 50
+    return 20
 
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
