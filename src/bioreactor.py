@@ -35,7 +35,7 @@ T_END = 40
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 1                         # Time step
+dt = 0.1                         # Time step
 L = int(TIME_RANGE / dt)         # Simulation steps
 N_p = 7                          # Prediction horizon
 Q = 1.5                          # Weight for tracking
@@ -72,7 +72,8 @@ def simulate(F: callable, plot: bool=True) -> np.ndarray:
     t_points = np.arange(T_START, T_END, dt)
     F_func = interp1d(t_points, [F(t) for t in t_points], kind="linear", fill_value="extrapolate")
     
-    sol = solve_ivp(plant_model, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F_func,), t_eval=np.arange(T_START, T_END, dt))
+    sol = solve_ivp(plant_model, t_span=(T_START, T_END), y0=[X_0, S_0, V_0], args=(F_func,), t_eval=np.arange(T_START, T_END, dt), method='LSODA', rtol=1e-6, atol=1e-12)
+
     print(f'Maximum biomass concentration: {np.max(sol.y[0]):.2f} g/l at time {sol.t[np.argmax(sol.y[0])]:.2f} hours')
     if plot:
         plt.figure(figsize=(12, 8))
@@ -195,7 +196,7 @@ def mpc(model: str = 'discretized'):
             F[step] = F[step - 1] if step > 0 else F_0  # Use fallback strategy
             F_opt_prev = np.roll(F_opt_prev, -1)  # Shift the previous optimal F values
             
-        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), t_eval=[t+dt], method='RK45')
+        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), t_eval=[t+dt], method='LSODA', rtol=1e-6, atol=1e-12)
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
         
         # TODO: Maybe add noise to the system states to simulate real-world conditions
@@ -224,7 +225,7 @@ def mpc_pso(model: str = 'discretized'):
         # Use GA to optimize the cost function
         F_opt, _ = pso(ga_cost_function, lb=[F_MIN]*N_p, ub=[F_MAX]*N_p, args=(X[step], S[step], V[step], t, model))
         F[step] = F_opt[0]
-        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
+        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), method='LSODA', rtol=1e-6, atol=1e-12)
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
 
     return X, S, V, F
@@ -263,7 +264,7 @@ def mpc_diff_evol(model: str = 'discretized'):
         F[step] = res.x[0]
 
         # Integrate the system dynamics
-        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],))
+        sol = solve_ivp(dynamic_system, t_span=(t, t + dt), y0=[X[step], S[step], V[step]], args=(F[step],), method='LSODA', rtol=1e-6, atol=1e-12)
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
 
     return X, S, V, F
@@ -305,7 +306,7 @@ def evaluation(F):
     sol_V = [V_0]
 
     for i in range(len(times)-1):
-        sol = solve_ivp(plant_model, t_span=[times[i], times[i+1]], y0=y0, args=(F_func,), method='RK45')
+        sol = solve_ivp(plant_model, t_span=[times[i], times[i+1]], y0=y0, args=(F_func,),  method='LSODA', rtol=1e-6, atol=1e-12)
         y0 = sol.y[:, -1]  # Update initial condition
         sol_t.append(times[i+1])
         sol_X.append(y0[0])
@@ -361,7 +362,7 @@ def generate_training_data():
         
         y0 = [X0, S0, V0]
         
-        sol = solve_ivp(system_odes, t_span, y0, args=(F,), t_eval=np.arange(t_span[0], t_span[1], dt))
+        sol = solve_ivp(system_odes, t_span, y0, args=(F,), t_eval=np.arange(t_span[0], t_span[1], dt), method='LSODA', rtol=1e-6, atol=1e-12)
         
         for i in range(len(sol.t) - 1):
             X_t = [sol.y[0, i], sol.y[1, i], sol.y[2, i], F]  # Features
