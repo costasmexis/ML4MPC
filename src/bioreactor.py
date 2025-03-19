@@ -31,13 +31,13 @@ V_0 = 1.56
 
 # Time parameters
 T_START = 0
-T_END = 5
+T_END = 40
 TIME_RANGE = int(T_END - T_START) # Absolute time 
 
 # MPC parameters
-dt = 0.005                         # Time step
+dt = 1                         # Time step
 L = int(TIME_RANGE / dt)         # Simulation steps
-N_p = 3                          # Prediction horizon
+N_p = 7                          # Prediction horizon
 Q = 1.5                          # Weight for tracking
 Q_term = 0.0                     # Weight for terminal state
 R = 0.1                            # Weight for control effort
@@ -125,7 +125,7 @@ def discretized_model(t, X, S, V, F, h=0.01):
 ############# Model Predictive Control #############
 # ----- Set-point trajectory func -----
 def set_point(t):
-    return 20
+    return 60
 
 # ----- Cost function -----
 def cost_function(F_opt, X, S, V, t, model='discretized'):
