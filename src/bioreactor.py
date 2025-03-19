@@ -1,17 +1,16 @@
 import copy
+from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from pyswarm import pso
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
-from scipy.optimize import minimize
+from scipy.optimize import differential_evolution, minimize
 from tqdm import tqdm
-
-from pyswarm import pso
-from scipy.optimize import differential_evolution
 
 # ----- Constants -----
 # Num of samples
@@ -171,7 +170,7 @@ def delta_F_constraint(F_opt):
     return 0.05 - np.abs(delta_F) # Constraint: |delta_F| <= 0.05
 
 # ----- MPC -----
-def mpc(model: str = 'discretized'):
+def mpc(model: str = 'discretized', noise: float = 0.0):
     # Initialize system variables
     X = np.empty(L+1)
     S = np.empty(L+1)
@@ -200,9 +199,10 @@ def mpc(model: str = 'discretized'):
         X[step + 1], S[step + 1], V[step + 1] = sol.y[:, -1]
         
         # TODO: Maybe add noise to the system states to simulate real-world conditions
-        # X[step + 1] += np.random.normal(0, X[step + 1] * 0.05)
-        # S[step + 1] += np.random.normal(0, S[step + 1] * 0.05)
-        # V[step + 1] += np.random.normal(0, V[step + 1] * 0.05)
+        if noise > 0:
+            X[step + 1] += np.random.normal(0, X[step + 1] * noise)
+            S[step + 1] += np.random.normal(0, S[step + 1] * noise)
+            V[step + 1] += np.random.normal(0, V[step + 1] * noise)
         
     return X, S, V, F
 
@@ -293,10 +293,16 @@ def plot_results(X, F):
 
 ############# Evaluation #############
 # -------- Evaluate MPC solving system of ODEs --------
-def evaluation(F):
+def evaluation(F: Union[callable, np.ndarray]): 
     
     t_points = np.arange(0, TIME_RANGE, dt)
-    F_func = interp1d(t_points, F, kind="linear", fill_value="extrapolate")
+    
+    if isinstance(F, np.ndarray):
+        F_func = interp1d(t_points, F, kind="linear", fill_value="extrapolate")
+    elif callable(F):
+        F_func = F
+    else:
+        raise ValueError("F must be a callable or a numpy array")
 
     y0 = [X_0, S_0, V_0]
     times = np.arange(0, TIME_RANGE+dt, dt)
@@ -320,6 +326,7 @@ def evaluation(F):
 
     print(f'Maximum biomass concentration: {np.max(sol_X):.2f} g/l at time {sol_t[np.argmax(sol_X)]:.2f} hours')
     
+    
     plt.figure(figsize=(12, 18))
     plt.subplot(3, 1, 1)
     plt.step(times, [set_point(t) for t in times], "r--", label="Setpoint")
@@ -329,7 +336,10 @@ def evaluation(F):
     plt.grid()
 
     plt.subplot(3, 1, 2)
-    plt.step(sol_t, F_func(sol_t), label='Feed Rate')
+    if isinstance(F, np.ndarray):
+        plt.step(sol_t, F_func(sol_t), label='Feed Rate')
+    elif callable(F):
+        plt.step(sol_t, [F(t) for t in sol_t], label='Feed Rate')
     plt.legend()
     plt.grid()
     
@@ -373,7 +383,7 @@ def generate_training_data():
             
     return np.array(X), np.array(y)
 
-   
+#################################################################   
 ####################Physics-Informed Neural Network #############
 NUM_EPOCHS = 50000
 LEARNING_RATE = 1e-2
