@@ -1,0 +1,177 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+from scipy.optimize import minimize
+
+
+def interpolate(X,time):
+    X1,X2=X
+    t1,t2,tint=time
+
+    Xint=X1+(X2-X1)*(tint-t1)/(t2-t1)
+    return Xint
+
+Xint=interpolate([2.62,5.65],[3.59,4.53,4.3])
+Xint
+
+Sint=interpolate([5.752,0.352],[3.59,4.53,4.3])
+Sint
+
+# Kinetic parameters
+
+mu_max = 0.86988  # 1/h
+Ks = 0.000123762  # g/l
+Yxs= 0.435749     # g/g
+Sin= 286          # g/l
+
+
+# Αρχικές συνθήκες
+X0 = Xint
+S0 = Sint
+V0 = 1.8  #L
+F0 = 0.01 #L/h
+
+# Βήμα διακριτοποίησης
+h = 0.01
+
+# MPC Step
+dt = 0.1
+
+# Absolute time
+At=5
+#Simulation Steps
+SS=int(At/dt)
+
+# Prediction horizon and MPC weights
+Np =5
+Q=10
+R=0
+# Περιορισμοί για την ελεγχόμενη μεταβλητή
+F_min = 0
+F_max = 0.1
+bnds = [(F_min, F_max) for _ in range(Np)]
+
+# Ορισμός των διαφορικών εξισώσεων που περιγράφουν το μοντέλο
+def plant_model(t, y, F):
+    X, S, V = y
+    S=max(S,0)
+    dX_dt = (mu_max * S / (Ks + S)) * X - (F / V) * X
+    dS_dt = -(1 / Yxs) * (mu_max * S / (Ks + S)) * X + (F / V) * (Sin - S)
+    dV_dt = F
+    return np.array([dX_dt, dS_dt, dV_dt])
+
+# Διακριτοποιημένο Μοντέλο
+def discrete_model(X, S, V, F, h):
+    k1 = plant_model(0, [X, S, V], F)
+    k2 = plant_model(0 + h / 2, [X + k1[0] * h / 2, S + k1[1] * h / 2, V + k1[2] * h / 2], F)
+    k3 = plant_model(0 + h / 2, [X + k2[0] * h / 2, S + k2[1] * h / 2, V + k2[2] * h / 2], F)
+    k4 = plant_model(0 + h, [X + k3[0] * h, S + k3[1] * h, V + k3[2] * h], F)
+
+    X_next = X + (h / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0])
+    S_next = S + (h / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1])
+    V_next = V + (h / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2])
+    return X_next, S_next, V_next
+    
+    #Επειδή ο t δεν χρησιμοποιείται στις εξισώσεις η τιμή 0 είναι placeholder,
+    #μπορούμε να βάλουμε οποιαδήποτε τιμή στον χρόνο όταν καλούμε τη plant_model χειροκίνητα.
+
+# Ορισμός συνάρτησης Κόστους για το MPC
+# def cost_function(F_opt, X, S, V, t, Q=3, R=0.1):
+#     J = 0
+#     X_curr, S_curr, V_curr = X, S, V
+
+#     for k in range(Np):
+#         Cb = Cb_set(t+k*dt)
+#         X_next, S_next, V_next = discrete_model(X_curr, S_curr, V_curr, F_opt[k], h)
+#         J += Q * (Cb - X_next) ** 2  # Tracking error
+
+#         if k > 0:
+#             J += R * (F_opt[k] - F_opt[k - 1]) ** 2  # Penalization of fast input changes
+
+#         X_curr, S_curr, V_curr = X_next, S_next, V_next
+
+#     return J
+def cost_function(F_opt, X, S, V):
+    X_curr, S_curr, V_curr = X, S, V
+    biomass_initial = X * V  # Initial total biomass
+
+    for k in range(Np):
+        X_next, S_next, V_next = discrete_model(X_curr, S_curr, V_curr, F_opt[k], h)
+        X_curr, S_curr, V_curr = X_next, S_next, V_next
+
+    biomass_final = X_curr * V_curr
+    productivity =  (biomass_final - biomass_initial)/(Np * dt)
+    # We minimize negative productivity to maximize it
+    J = -Q * productivity
+
+    # Add regularization for smooth control
+    for k in range(1, Np):
+        J += R * (F_opt[k] - F_opt[k - 1]) ** 2
+
+    return J
+    
+    # Προσομοίωση του συστήματος
+X = np.zeros(SS + 1)
+S = np.zeros(SS + 1)
+V = np.zeros(SS + 1)
+F = np.zeros(SS)
+Productivity=np.zeros(SS)
+X[0], S[0], V[0] = X0, S0, V0
+
+for step in range(SS):
+    t=step*dt
+    # Βελτιστοποίηση του MPC
+    res = minimize(
+        cost_function,
+        F0 * np.ones(Np),
+        args=(X[step], S[step], V[step]),
+        bounds=bnds,
+        method="SLSQP"
+    )
+
+    # Επιλογή της πρώτης τιμής της βέλτιστης εισόδου
+    F_MPC = res.x[0]
+
+    # Ενημέρωση του συστήματος με επίλυση της διαφορικής εξίσωσης
+    sol = solve_ivp(
+        plant_model,
+        t_span=[t,t+dt],
+        y0=[X[step], S[step], V[step]],
+        args=(F_MPC,),
+        method="LSODA",
+        t_eval=[t,t + dt],
+    )
+
+    
+    X[step + 1], S[step + 1], V[step + 1] = sol.y[:,-1]
+    biomass_prev = X[step] * V[step]
+    biomass_curr = X[step + 1] * V[step + 1]
+    
+    Productivity[step] = (biomass_curr - biomass_prev) / dt  # or use V if needed
+
+    F[step] = F_MPC
+    
+    # Σχεδίαση Αποτελεσμάτων
+plt.figure(figsize=(13, 10))
+plt.subplot(3, 1, 1)
+plt.plot(np.arange(0,At,dt),Productivity,label="Productivity of X")
+plt.xlabel("Time [h]")
+plt.ylabel("Productivity of X [g/h]")
+plt.legend()
+
+plt.subplot(3, 1, 2)
+plt.step(np.arange(0,At,dt), F, label="Feed Flow Rate F")
+plt.xlabel("Time [h]")
+plt.ylabel("F [L/h]")
+plt.legend()
+
+plt.subplot(3,1,3)
+plt.plot(np.arange(0,At+dt,dt), X, label="Biomass X")
+#plt.plot(np.arange(0,At+dt,dt), [Cb_set(t) for t in np.arange(0,At+dt,dt)], "r--", label="Setpoint")
+plt.ylabel("X Concentration [g/L]")
+plt.xlabel("Time [h]")
+plt.legend()
+
+plt.grid()
+plt.show()
+    
