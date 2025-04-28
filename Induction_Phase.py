@@ -1,0 +1,236 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+from scipy.optimize import minimize
+
+
+
+def plant_model(t, y, F):
+
+    X, S, V, P = y
+    
+    # Very small threshold to avoid division by zero
+    if S > 1e-12:
+        mu_val = mu_max * (S / (Ks + S))
+    else:
+        mu_val = 0.0
+    
+    # Biomass growth
+    dX_dt = mu_val * X - (F / V) * X
+    
+    # Substrate consumption/feeding
+    dS_dt = -(1.0 / Yxs) * mu_val * X + (F / V) * (Sin - S)
+    
+    # Volume change
+    dV_dt = F
+    
+    # Product formation
+    dP_dt = (2.0 - 0.1 * mu_val) * a * X
+
+    return np.array([dX_dt, dS_dt, dV_dt, dP_dt])
+
+
+def rk4_step(t, state, F, h):
+    """One RK4 step from t to t+h with constant F."""
+    X, S, V, P = state
+
+    k1 = plant_model(t, [X, S, V, P], F)
+    k2 = plant_model(t + h/2.0,
+                     [X + k1[0]*h/2.0,
+                      S + k1[1]*h/2.0,
+                      V + k1[2]*h/2.0,
+                      P + k1[3]*h/2.0],
+                     F)
+    k3 = plant_model(t + h/2.0,
+                     [X + k2[0]*h/2.0,
+                      S + k2[1]*h/2.0,
+                      V + k2[2]*h/2.0,
+                      P + k2[3]*h/2.0],
+                     F)
+    k4 = plant_model(t + h,
+                     [X + k3[0]*h,
+                      S + k3[1]*h,
+                      V + k3[2]*h,
+                      P + k3[3]*h],
+                     F)
+
+    X_next = X + (h/6.0)*(k1[0] + 2.0*k2[0] + 2.0*k3[0] + k4[0])
+    S_next = S + (h/6.0)*(k1[1] + 2.0*k2[1] + 2.0*k3[1] + k4[1])
+    V_next = V + (h/6.0)*(k1[2] + 2.0*k2[2] + 2.0*k3[2] + k4[2])
+    P_next = P + (h/6.0)*(k1[3] + 2.0*k2[3] + 2.0*k3[3] + k4[3])
+    
+    return X_next, S_next, V_next, P_next
+
+def discretized_model_one_control_interval(X0, S0, V0, P0, F, dt, h):
+    """
+    Integrate the plant model from t to t+dt, 
+    using multiple fixed RK4 steps of size h.
+    """
+    # How many sub-steps to cover one dt?
+    n_sub = int(dt / h)  # must be an integer if dt/h is exact
+
+    X, S, V, P = X0, S0, V0, P0
+
+    for _ in range(n_sub):
+        X, S, V, P = rk4_step(0, [X, S, V, P], F, h)
+
+    return X, S, V, P
+
+
+
+def cost_function(F_opt, y0):
+    """
+    cost_function is called by minimize() to compute the objective.
+    F_opt: array of length Np (the proposed feed flow rates over horizon).
+    y0: current state [X_curr, S_curr, V_curr, P_curr].
+    """
+    X_curr, S_curr, V_curr, P_curr = y0
+    
+    protein_initial = P_curr * V_curr
+
+    # Predict states over Np steps
+    for i in range(Np):
+        # Integrate from t_k to t_k + dt, in sub-steps
+        X_curr, S_curr, V_curr, P_curr = discretized_model_one_control_interval(
+            X_curr, S_curr, V_curr, P_curr,
+            F=F_opt[i],
+            dt=dt,      # e.g. dt=0.1
+            h=h         # e.g. h=0.01
+        )
+
+    protein_final = P_curr * V_curr
+
+    # Productivity over Np * dt hours
+    time_horizon = Np * dt
+    protein_productivity = (protein_final - protein_initial) / time_horizon
+    J = -Q * protein_productivity
+
+    for i in range(1, Np):
+        J += R * (F_opt[i] - F_opt[i - 1])**2
+
+    return J
+
+# Kinetic parameters
+
+mu_max = 0.86988  # 1/h
+Ks = 0.000123762  # g/l
+Yxs= 0.435749     # g/g
+Sin= 286          # g/l
+
+#Product parameter a
+a=0.005
+
+# Αρχικές συνθήκες
+X0 = 31
+S0 = 0
+V0 = 2.1  #L
+P0=0
+F0 = 0.001 #L/h
+
+# Βήμα διακριτοποίησης
+h = 0.01
+
+# MPC Step
+dt = 0.1
+
+# Absolute time
+At=37
+#Simulation Steps
+SS=int(At/dt)
+
+# Prediction horizon and MPC weights
+Np =7
+Q=10
+R=0.5
+
+# Περιορισμοί για την ελεγχόμενη μεταβλητή
+F_min = 0.0
+F_max = 0.0156
+bnds = [(F_min, F_max) for _ in range(Np)]
+
+X=np.zeros(SS+1)
+S=np.zeros(SS+1)
+V=np.zeros(SS+1)
+Productivity=np.zeros(SS)
+P=np.zeros(SS+1)
+F=np.zeros(SS)
+
+X[0],S[0],V[0], P[0] = X0, S0, V0, P0
+
+
+for step in range(SS):
+    t=step*dt
+    
+     # Βελτιστοποίηση του MPC
+    res = minimize(
+        cost_function,
+        F0 * np.ones(Np),
+        args=([X[step], S[step], V[step],P[step]]),
+        bounds=bnds,
+        method="SLSQP"
+    )
+
+    # Επιλογή της πρώτης τιμής της βέλτιστης εισόδου
+    F_MPC = res.x[0]
+
+    # Ενημέρωση του συστήματος με επίλυση της διαφορικής εξίσωσης
+    sol = solve_ivp(
+        plant_model,
+        t_span=[t,t+dt],
+        y0=[X[step], S[step], V[step],P[step]],
+        args=(F_MPC,),
+        #method="LSODA",
+        t_eval=[t,t + dt],
+    )
+
+    
+    X[step + 1], S[step + 1], V[step + 1], P[step+1] = sol.y[:,-1]
+    product_prev = P[step] * V[step]
+    product_curr = P[step + 1] * V[step + 1]
+    
+    Productivity[step] = (product_curr - product_prev) / dt 
+
+    F[step] = F_MPC
+
+
+t_plot=np.arange(0,At+dt,dt)
+
+# Σχεδίαση Αποτελεσμάτων
+plt.figure(figsize=(10, 20))
+plt.subplot(5, 1, 1)
+plt.plot(np.arange(0,At,dt),Productivity,label="Productivity of Nanoprotein")
+plt.xlabel("Time [h]")
+plt.ylabel("Pproductivity [g/h]")
+plt.legend()
+plt.grid()
+
+plt.subplot(5, 1, 2)
+plt.step(np.arange(0,At,dt), F, label="Feed Flow Rate F")
+plt.xlabel("Time [h]")
+plt.ylabel("F [L/h]")
+plt.legend()
+plt.grid()
+
+# plt.subplot(5,1,3)
+# plt.plot(t_plot, X, label="Biomass X")
+# plt.ylabel("X Concentration [g/L]")
+# plt.xlabel("Time [h]")
+# plt.legend()
+# plt.grid()
+
+# plt.subplot(5,1,4)
+# plt.plot(t_plot, V, label="Reactor Volume V")
+# plt.ylabel("Volume [L]")
+# plt.xlabel("Time [h]")
+# plt.legend()
+# plt.grid()
+
+plt.subplot(5,1,3)
+plt.plot(t_plot, P, label="Nanoprotein Concentration")
+plt.ylabel("Concentration [g/L]")
+plt.xlabel("Time [h]")
+plt.legend()
+
+plt.grid()
+plt.savefig("MyFig.jpg")
+plt.show()
